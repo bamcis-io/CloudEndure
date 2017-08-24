@@ -608,6 +608,11 @@ Function Get-CEMachine {
 
             Lists all of the CE machines in the account.
 
+		.EXAMPLE
+			Get-CEMachine -Id 9f620e77-3f2e-4df3-bc37-ec4ee736d92f
+
+			Gets details for the machine specified.
+
         .INPUTS
             None
 
@@ -616,7 +621,7 @@ Function Get-CEMachine {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
+			LAST UPDATE: 8/24/2017
     #>
     [CmdletBinding()]
 	[OutputType([PSCustomObject], [PSCustomObject[]])]
@@ -646,12 +651,15 @@ Function Get-CEMachine {
 			$Session = $SessionInfo.User.Username
         }
 
-		if ($SessionInfo -ne $null) {
-
+		if ($SessionInfo -ne $null) 
+		{
 			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/machines"
 
 			if ($Id -ne [System.Guid]::Empty) {
 				$Uri += "/$($Id.ToString())"
+			}
+			else {
+				$Uri += "?all=true"
 			}
 
 			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session

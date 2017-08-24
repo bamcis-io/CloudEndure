@@ -43,5 +43,8 @@ Remove-CESession
 
 ## Revision History
 
+### 1.0.0.1
+Updated the Get-CEMachine cmdlet.
+
 ### 1.0.0.0
 Initial Release.
