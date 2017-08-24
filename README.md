@@ -1,5 +1,8 @@
 # CloudEndure
 
+## Information
+Currently, the cmdlets only support AWS environments being used as a migration target. Additional cloud environments as well as DR account support will be added as requested/needed.
+
 ## Usage
 
 Import-Module CloudEndure
