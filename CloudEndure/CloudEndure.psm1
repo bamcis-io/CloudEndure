@@ -355,15 +355,15 @@ Function New-CESession {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
+			LAST UPDATE: 8/28/2017
     #>
     [CmdletBinding()]
     [OutputType([System.String])]
 	Param(
 		[Parameter()]
 		[ValidateNotNullOrEmpty()]
-		[ValidateSet("LATEST", "v12")]
-		[System.String]$Version = "LATEST",
+		[ValidateSet("v12")]
+		[System.String]$Version = "v12",
 
 		[Parameter(Mandatory = $true, ParameterSetName = "Credential")]
 		[ValidateNotNull()]
@@ -421,27 +421,32 @@ Function New-CESession {
 			}
 		}
 
-        [System.String]$Uri = "$script:URL/$($Version.ToLower())/celogin"
+        [System.String]$Uri = "$script:URL/$($Version.ToLower())/login"
         [System.String]$Body = ConvertTo-Json -InputObject @{"username" = $Credential.UserName; "password" = (Convert-SecureStringToString -SecureString $Credential.Password)}
 		[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -ContentType "application/json" -Method Post -Body $Body -SessionVariable "WebSession"
 
-		$Temp = ConvertFrom-Json -InputObject $Result.Content
-        [System.Guid]$ProjectId = [System.Guid]::Parse($Temp.Project.Id)
+		if ($Result.StatusCode -eq 200)
+		{
+			$Temp = ConvertFrom-Json -InputObject $Result.Content
+			$WebSession.Credentials = $Credential
 
-        $WebSession.Credentials = $Credential
+			[System.String]$SummaryUri = "$script:Url/$($Version.ToLower())/ceme"
 
-        $Session = @{Url = $Uri; Session = $WebSession; ProjectId = $ProjectId; Version = $Version.ToLower(); CloudCredentials = $Temp.CloudCredentials; User = $Temp.User; Regions = $Temp.Regions}	
+			$Summary = ConvertFrom-Json -InputObject (Invoke-WebRequest -Uri $SummaryUri -Method Get -WebSession $WebSession | Select-Object -ExpandProperty Content)
 
-		if ($script:Sessions.ContainsKey($Temp.User.Username)) {
-			$script:Sessions.Set_Item($Temp.User.Username.ToLower(), $Session)
+			[System.Collections.Hashtable]$Session = @{Url = $Uri; Session = $WebSession; ProjectId = $Summary.Project.Id; Version = $Version.ToLower(); CloudCredentials = $Summary.CloudCredentials; User = $Summary.User; Regions = $Summary.Regions}	
+
+			if ($script:Sessions.ContainsKey($Summary.User.Username)) {
+				$script:Sessions.Set_Item($Summary.User.Username.ToLower(), $Session)
+			}
+			else {
+				$script:Sessions.Add($Summary.User.Username.ToLower(), $Session)
+			}
+
+			if ($PassThru) {
+				Write-Output -InputObject $Summary.User.Username.ToLower()
+			}
 		}
-		else {
-			$script:Sessions.Add($Temp.User.Username.ToLower(), $Session)
-		}
-
-        if ($PassThru) {
-            Write-Output -InputObject $Temp.User.Username.ToLower()
-        }
 	}
 
 	End {
@@ -3028,11 +3033,18 @@ Function Get-CETargetCloud {
 
 		if ($SessionInfo -ne $null) 
 		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/cloudCredentials/$($SessionInfo.CloudCredentials)/regions/$($SessionInfo.Regions.Target.Id)"
+			if ($SessionInfo.Regions.Target.Id -ne $SessionInfo.Regions.Generic.Id)
+			{
+				[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/cloudCredentials/$($SessionInfo.CloudCredentials)/regions/$($SessionInfo.Regions.Target.Id)"
 
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
 
-			Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+			}
+			else
+			{
+				Write-Output -InputObject $SessionInfo.Regions.Generic
+			}
 		}
 		else {
 			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
@@ -3043,36 +3055,121 @@ Function Get-CETargetCloud {
 	}
 }
 
-Function Get-CECloudRegions {
+Function Get-CESourceCloud {
 	<#
         .SYNOPSIS
-			Gets information about the available destination cloud regions.
+			Gets information about the source cloud environment.
 
         .DESCRIPTION
-			The cmdlet retrieves information about the regions in the target cloud. This information includes the available regions, their subnets, security groups,
-			IAM instance profiles, available instance types, and KMS keys.
+			The cmdlet retrieves information about the source cloud environment.
 
         .PARAMETER Session
             The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
             
         .EXAMPLE
-            Get-CECloudRegions
+            Get-CESourceCloud
 
-            Retrieves the details of the destination cloud environment.
+            Retrieves the details of the source cloud environment.
 
         .INPUTS
             None
 
         .OUTPUTS
-           System.Management.Automation.PSCustomObject[]
+           System.Management.Automation.PSCustomObject
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 8/22/2017
+			LAST UPDATE: 8/28/2017
     #>
 	[CmdletBinding()]
-	[OutputType([PSCustomObject[]])]
+	[OutputType([PSCustomObject])]
 	Param(
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+	)
+
+	Begin {
+
+	}
+
+	Process {
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			if ($SessionInfo.Regions.Source.Id -ne $SessionInfo.Regions.Generic.Id)
+			{
+				[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/cloudCredentials/$($SessionInfo.CloudCredentials)/regions/$()"
+
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+			}
+			else
+			{
+				Write-Output -InputObject $SessionInfo.Regions.Generic
+			}
+		}
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+	}
+}
+
+Function Get-CECloudRegion {
+	<#
+        .SYNOPSIS
+			Gets information about the available destination cloud regions.
+
+        .DESCRIPTION
+			The cmdlet retrieves information about a region in the target cloud or if no Id is specified, all available regions in the target cloud. 
+			This information includes the available regions, their subnets, security groups, IAM instance profiles, available instance types, and KMS keys.
+
+		.PARAMETER Id
+			The Id of the region to retrieve. If no Id is specified, all available regions in the target cloud are returned.
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+            
+        .EXAMPLE
+            Get-CECloudRegion
+
+            Retrieves the details of all regions the destination cloud environment.
+
+		.EXAMPLE
+			Get-CECloudRegion -Id 47d842b8-ebfa-4695-90f8-fb9ab686c708
+
+			Retrieves details of the region identified with the supplied Guid.
+
+        .INPUTS
+            System.Guid
+
+        .OUTPUTS
+           System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 8/28/2017
+    #>
+	[CmdletBinding()]
+	[OutputType([PSCustomObject], [PSCustomObject[]])]
+	Param(
+		[Parameter(ValueFromPipeline = $true)]
+		[System.Guid]$Id = [System.Guid]::Empty,
+
 		[Parameter()]
 		[ValidateNotNullOrEmpty()]
 		[ValidateScript({
@@ -3098,9 +3195,21 @@ Function Get-CECloudRegions {
 		{
 			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/cloudCredentials/$($SessionInfo.CloudCredentials)/regions"
 
+			if ($Id -ne [System.Guid]::Empty)
+			{
+				$Uri += "/$($Id.ToString())"
+			}
+
 			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
 
-			Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+			if ($Id -eq [System.Guid]::Empty)
+			{
+				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+			}
+			else 
+			{
+				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content))
+			}
 		}
 		else {
 			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
@@ -3608,6 +3717,86 @@ Function Get-CEUser {
 		if ($SessionInfo -ne $null) 
 		{
 			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/me"
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+Function Get-CEAccountSummary {
+	<#
+		.SYNOPSIS
+			Retrieves summary data about the CE account.
+
+		.DESCRIPTION
+			This cmdlet retrieves a lot of information about the CE account including:
+
+			-Account (Features & Id)
+			-CloudCredentials (Id)
+			-Clouds (Configured cloud environments)
+			-DateTime (Current time)
+			-License
+			-Project
+			-Regions (Source & Target)
+			-ReplicationConfiguration
+			-User
+
+			This was the data originally returned by the celogin API call.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.EXAMPLE
+			Get-CEAccountSummary
+
+			Gets account summary data.
+
+		.INPUTS
+			None
+
+		.OUTPUTS
+			PSCustomObject
+
+		 .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 8/24/2017
+
+	#>
+	 Param(
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/ceme"
 
 			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
 

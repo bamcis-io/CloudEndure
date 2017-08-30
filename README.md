@@ -52,6 +52,9 @@ The commands will get all of the blueprints in both accounts.**
 
 ## Revision History
 
+### 1.0.0.2
+Updated New-CESession cmdlet to reflect changes CloudEndure made to the API. Added Get-CEAccountSummary and Get-CESourceCloud cmdlets. Changed name of Get-CECloudRegions to Get-CECloudRegion and added an Id parameter.
+
 ### 1.0.0.1
 Updated the Get-CEMachine cmdlet.
 
