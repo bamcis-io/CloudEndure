@@ -1504,7 +1504,7 @@ Function New-CEReplicationConfiguration {
 
 		[System.Collections.Hashtable]$RegionMapping = @{"Generic" = "f54420d5-3de4-40bb-b35b-33d32ad8c8ef"}
 
-		[PSCustomObject[]]$CERegions = Get-CECloudRegions -Session $DynSession 
+		[PSCustomObject[]]$CERegions = Get-CECloudRegion -Session $DynSession 
 
 		$CERegions | ForEach-Object {
 			$RegionMapping.Add($_.Name, $_.Id)
