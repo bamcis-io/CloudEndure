@@ -24,6 +24,12 @@ $script:ProfileLocation = "$env:USERPROFILE\.cloudendure\credentials"
 
 [System.Collections.Hashtable]$script:Sessions = @{}
 
+[System.String[]]$script:CommonParams = [System.Management.Automation.PSCmdlet]::CommonParameters + [System.Management.Automation.PSCmdlet]::OptionalCommonParameters + @("PassThru", "Force")
+
+[System.String]$script:AllParameterSets = "__AllParameterSets"
+
+#region Profiles & Sessions
+
 Function New-CEProfile {
 	<#
 		.SYNOPSIS
@@ -594,6 +600,3045 @@ Function Remove-CESession {
     }
 }
 
+#endregion
+
+#region Blueprints
+
+Function New-CEBlueprint {
+	<#
+		.SYNOPSIS
+			Define the target machine characteristics: machine and disk types, network configuration, etc.
+
+		.DESCRIPTION
+			This cmdlet defines the target machine characteristics: machine and disk types, network configuration, etc. There can be only one blueprint per machine per region. Returns the newly created object.
+
+		.PARAMETER Blueprint
+			The blueprint to apply, the hashtable can be defined with the following data (this is presented in JSON, which the hashtable will be converted to):
+
+			{
+			  "iamRole": "string",
+			  "staticIp": "string",
+			  "tags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "publicIPAction": "ALLOCATE",
+			  "machineName": "string",
+			  "privateIPs": [
+				"string"
+			  ],
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
+			  "subnetsHostProject": "string",
+			  "instanceType": "string",
+			  "placementGroup": "string",
+			  "disks": [
+				{
+				  "iops": 0,
+				  "type": "COPY_ORIGIN",
+				  "name": "string"
+				}
+			  ],
+			  "privateIPAction": "CREATE_NEW",
+			  "staticIpAction": "EXISTING",
+			  "subnetIDs": [
+				"string"
+			  ]
+			}		
+
+		.PARAMETER IAMRole
+			AWS only. The AWS IAM Role to associate with this blueprint.
+
+		.PARAMETER InstanceType
+			The instance type to launch the replica as.
+
+		.PARAMETER PlacementGroup
+			AWS Only. The placement group to launch the instance in.
+
+		.PARAMETER PrivateIPAction
+			The action for the instance's private IP address.
+
+		.PARAMETER PrivateIPs
+			If you select CUSTOM for PrivateIPAction, specify the private IPs you want associated with the instance.
+
+		.PARAMETER PublicIPAction
+			Whether to allocate an ephemeral public IP, or not. AS_SUBNET causes CloudEndure to copy this property from the source machine.
+
+		.PARAMETER RunAfterLaunch
+			AWS Only. Specify true to have the instance started after it is launched or false to leave it in a stopped state.
+
+		.PARAMETER SecurityGroupIds
+			AWS Only. The security groups that will be associated with the instance.
+
+		.PARAMETER StaticIP
+			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
+
+		.PARAMETER SubnetIDs
+			Specify the subnet Id(s) the instance will be associated with.
+			
+		.PARAMETER Tags
+			AWS only. Tags that will be applied to the target machine.
+
+		.PARAMETER MachineName
+			The instance to create this blueprint for.
+
+		.PARAMETER SubnetsHostProject
+			GCP only. Host project for cross project network subnet.
+
+		.PARAMETER Disks
+			AWS only. Target machine disk properties. An array of objects with properties as follows:
+
+				IOPS: Int >= 0
+				TYPE: "COPY_ORIGIN", "STANDARD", "SSD", "PROVISIONED_SSD", "ST1", "SC1"
+				NAME: Disk name as appears in the source machine object.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER PassThru
+			Passes through the created object.
+
+		.EXAMPLE
+			New-CEBlueprint -MachineName "MyTestMachine" -IAMRole EC2StandardInstanceProfile -SubnetIDs @("subnet-152acf5d") -SecurityGroupIDs ("sg-6053bf1f") 
+
+			Creates a new blueprint and associates an AWS IAM Role, a specific deployment subnet, and a security group belonging to the VPC containing the subnet.
+
+		.EXAMPLE
+			New-CEBlueprint -MachineName "MyTestMachine" -SubnetIDs @("Default")
+			
+			Deploys the machine into the default subnet for configured target region.
+
+		.INPUTS
+            None or System.Collections.Hashtable
+
+        .OUTPUTS
+           None or System.Management.Automation.PSCustomObject
+
+			The JSON representation of the return value:
+
+			{
+			  "iamRole": "string",
+			  "staticIp": "string",
+			  "tags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "publicIPAction": "ALLOCATE",
+			  "machineName": "string",
+			  "privateIPs": [
+				"string"
+			  ],
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
+			  "subnetsHostProject": "string",
+			  "instanceType": "string",
+			  "placementGroup": "string",
+			  "machineId": "string",
+			  "region": "string",
+			  "disks": [
+				{
+				  "iops": 0,
+				  "type": "COPY_ORIGIN",
+				  "name": "string"
+				}
+			  ],
+			  "privateIPAction": "CREATE_NEW",
+			  "staticIpAction": "EXISTING",
+			  "id": "string",
+			  "subnetIDs": [
+				"string"
+			  ]
+			}
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+			
+	#>
+	[CmdletBinding(DefaultParameterSetName="__AllParameterSets")]
+	[OutputType([System.Management.Automation.PSCustomObject])]
+	Param(
+		[Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0, ParameterSetName = "Blueprint")]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$Blueprint = @{},
+
+		[Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$Tags = @{},
+
+		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBENT")]
+		[System.String]$PublicIPAction,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$MachineName,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[System.Boolean]$RunAfterLaunch = $true,
+
+		[Parameter(ParameterSetName = "GCP")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$SubnetsHostProject,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable[]]$Disks,
+
+		[Parameter()]
+		[ValidateSet("CREATE_NEW", "COPY_ORIGIN", "CUSTOM_IP")]
+		[System.String]$PrivateIPAction,
+
+		[Parameter()]
+		[ValidateSet("EXISTING", "DONT_CREATE", "CREATE_NEW", "IF_IN_ORIGIN")]
+		[System.String]$StaticIPAction,
+
+		[Parameter()]
+		[Switch]$PassThru,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+	)
+
+	DynamicParam {
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $DynSessionInfo = $script:Sessions.Get_Item($Session)
+			$DynSession = $Session
+        }
+        else {
+            $DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $DynSession = $DynSessionInfo.User.Username
+        }
+
+		[System.Collections.Hashtable]$CECloud = Get-CETargetCloud -Session $DynSession | ConvertTo-Hashtable
+
+		$SubnetMapping = @{}
+
+		# Create the dictionary 
+        [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
+		
+		New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet ($CECloud.InstanceTypes) -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+		switch ($CECloud.Cloud)
+		{
+			"AWS" {
+
+				if ($CECloud.IAMRoles.Length -gt 0)
+				{
+					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $CECloud.IAMRoles -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+				}
+
+				if ($CECloud.PlacementGroups.Length -gt 0)
+				{
+					New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet ($CECloud.PlacementGroups) -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+				}
+
+				if ($CECloud.Subnets.Length -gt 0)
+				{
+					$CECloud.Subnets | ForEach-Object {
+						if ($_.Name -ne "Default") {
+							$SubnetMapping.Add($_.SubnetId, $_.NetworkId)
+						}
+					}
+
+					$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
+					# Add default to allow user to specify the default subnet for the configured region
+					$SubnetSet += "Default"
+
+					New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ValidateSet $SubnetSet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+				}
+
+				$Type = Import-UnboundParameterCode -PassThru
+				$Subnets = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.Object]).Invoke($Type, @($PSCmdlet, "SubnetIDs", -1))
+
+				$Key = [System.String]::Empty
+
+				if ($Subnets -is [System.Array])
+				{
+					$Subnet = $Sunets[0]
+				}
+				elseif ($Subnets -is [System.String])
+				{
+					if (-not [System.String]::IsNullOrEmpty($Subnets))
+					{
+						$Key = $Subnets
+					}
+				}
+
+				$Subnet = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -ieq $Key -or $_.Id -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
+
+				# If the subnet is "Default", you won't be able to select a security group, so a new one will be created
+				# Make sure there are security groups in this region and that we found a matching one
+				if ($CECloud.SecurityGroups -ne $null -and $CECloud.SecurityGroups.Length -gt 0 -and $Subnet -ne $null)
+				{
+					# Get the network Id based on the selected subnet so we can get the right security groups as options
+					[System.String[]]$SGSet = $CECloud | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.NetworkId -eq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
+
+					New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+				}
+
+				break
+			}
+			"GCP" {
+
+				break
+			}
+			"Azure" {
+
+				break
+			}
+			default {
+				throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
+				break
+			}
+		}
+
+		if ($PrivateIPAction -eq "CUSTOM_IP")
+		{
+			New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -ValidateNotNullOrEmpty -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+		}
+
+		if ($StaticIPAction -eq "EXISTING")
+		{
+			New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+		}
+
+		return $RuntimeParameterDictionary
+	}
+
+	Begin {
+	}
+
+	Process {
+		 $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			if ($PSCmdlet.ParameterSetName -ne "Blueprint")
+			{
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
+
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
+
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
+
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
+
+				$Blueprint = @{}
+
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
+				{
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the blueprint object
+							if ($Item.Key -eq "Tags")
+							{
+								$Tags = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+								}
+
+								$Blueprint.Add($Item.Key, $Tags)
+							}
+							else {
+								$Blueprint.Add($Item.Key, $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
+				}
+			}
+
+			if ($BluePrint.StaticIPAction -ne "EXISTING") {
+                $BluePrint.StaticIP = ""
+            }
+
+            if ($BluePrint.PrivateIPAction -ne "CUSTOM_IP") {
+                $BluePrint.PrivateIPs = @()
+            }
+
+			Write-Host (ConvertTo-Json $Blueprint)
+
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/blueprints"
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Body (ConvertTo-Json -InputObject $BluePrint) -ContentType "application/json" -Method Post -WebSession $SessionInfo.Session
+        
+			if ($Result.StatusCode -eq 201 -and $PassThru)
+			{
+				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+	}
+}
+
+Function Get-CEBlueprint {
+	<#
+        .SYNOPSIS
+			Gets blueprint information.
+
+        .DESCRIPTION
+			The cmdlet retrieves a specific blueprint or all the blueprints of the specified account if no Id is provided.
+
+		.PARAMETER Id
+			The blueprint Id to retrieve. If this parameter is not specified, all blueprints for the account are returned.
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER Offset
+			With which item to start (0 based).
+
+		.PARAMETER Limit
+			A number specifying how many entries to return between 0 and 1500 (defaults to 1500).
+            
+        .EXAMPLE
+            Get-CEBlueprint
+
+            Retrieves the blueprints of the current account.
+
+		.EXAMPLE
+            Get-CEBlueprint -Offset 1501 -Limit 10
+
+            Retrieves the blueprints at index 1501 through 1511. This skips listing the first 1500 blueprints.
+
+		.EXAMPLE 
+			Get-CEBlueprint -Id 184142f8-a581-4c86-9285-e24382d60d55
+
+			Gets the blueprint matching the provided Id.
+
+        .INPUTS
+            None or System.Guid
+
+        .OUTPUTS
+           System.Management.Automation.PSCustomObject[] or System.Management.Automation.PSCustomObject
+
+			The JSON representation of the array:
+
+			[
+				{
+				  "iamRole": "string",
+				  "staticIp": "string",
+				  "tags": [
+					{
+					  "key": "string",
+					  "value": "string"
+					}
+				  ],
+				  "publicIPAction": "ALLOCATE",
+				  "machineName": "string",
+				  "privateIPs": [
+					"string"
+				  ],
+				  "securityGroupIDs": [
+					"string"
+				  ],
+				  "runAfterLaunch": true,
+				  "subnetsHostProject": "string",
+				  "instanceType": "string",
+				  "placementGroup": "string",
+				  "machineId": "string",
+				  "region": "string",
+				  "disks": [
+					{
+					  "iops": 0,
+					  "type": "COPY_ORIGIN",
+					  "name": "string"
+					}
+				  ],
+				  "privateIPAction": "CREATE_NEW",
+				  "staticIpAction": "EXISTING",
+				  "id": "string",
+				  "subnetIDs": [
+					"string"
+				  ]
+				}
+			]
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(DefaultParameterSetName = "List")]
+    [OutputType([PSCustomObject], [PSCustomObject[]])]
+    Param(
+		[Parameter(ValueFromPipeline = $true, Mandatory = $true, Position = 0, ParameterSetName = "Get")]
+		[System.Guid]$Id = [System.Guid]::Empty,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, [System.UInt32]::MaxValue)]
+		[System.UInt32]$Offset = 0,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, 1500)]
+		[System.UInt32]$Limit = 1500,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/blueprints"
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					if ($Id -ne [System.Guid]::Empty)
+					{
+						$Uri += "/$($Id.ToString())"
+					}
+					break
+				}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+					break
+				}
+				default {
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
+			}
+			
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+        
+			if ($Id -ne [System.Guid]::Empty)
+			{
+				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+			}
+			else 
+			{
+				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+Function Set-CEBlueprint {
+	<#
+        .SYNOPSIS
+			Sets a blueprint for a CE Instance.
+
+        .DESCRIPTION
+			The cmdlet updates the blueprint for a specific CE Instance. Set a parameter to an empty string to clear it from the blueprint.
+
+			Currently, this cmdlet only supports AWS target cloud environments.
+
+		.PARAMETER Blueprint
+			The updated blueprint data to send. This hashtable only needs to contain the data that you want to update. The original blueprint will be merged with this one.
+
+			The available configuration items are:
+
+			{
+			  "iamRole": "string",
+			  "staticIp": "string",
+			  "tags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "publicIPAction": "ALLOCATE",		# "ALLOCATE" "DONT_ALLOCATE" "AS_SUBNET"
+			  "machineName": "string",
+			  "privateIPs": [
+				"string"
+			  ],
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
+			  "subnetsHostProject": "string",
+			  "instanceType": "string",
+			  "placementGroup": "string",
+			  "disks": [
+				{
+				  "iops": 0,
+				  "type": "COPY_ORIGIN",		# "COPY_ORIGIN" "STANDARD" "SSD" "PROVISIONED_SSD" "ST1" "SC1"
+				  "name": "string"
+				}
+			  ],
+			  "privateIPAction": "CREATE_NEW",	# "CREATE_NEW" "COPY_ORIGIN" "CUSTOM_IP"
+			  "staticIpAction": "EXISTING",		# "EXISTING" "DONT_CREATE" "CREATE_NEW" "IF_IN_ORIGIN"
+			  "subnetIDs": [
+				"string"
+			  ]
+			}
+
+		.PARAMETER IAMRole
+			AWS Only. The AWS IAM Role to associate with this blueprint.
+
+		.PARAMETER InstanceType
+			The instance type to launch the replica as.
+
+		.PARAMETER PlacementGroup
+			AWS Only. The placement group to launch the instance in.
+
+		.PARAMETER PrivateIPAction
+			The action for the instance's private IP address.
+
+		.PARAMETER PrivateIPs
+			If you select CUSTOM for PrivateIPAction, specify the private IPs you want associated with the instance.
+
+		.PARAMETER PublicIPAction
+			Whether to allocate an ephemeral public IP, or not. AS_SUBNET causes CloudEndure to copy this property from the source machine.
+
+		.PARAMETER RunAfterLaunch
+			AWS Only. Specify true to have the instance started after it is launched or false to leave it in a stopped state.
+
+		.PARAMETER SecurityGroupIds
+			AWS Only. The security groups that will be associated with the instance.
+
+		.PARAMETER MachineName
+			The name of the replica instance.
+
+		.PARAMETER StaticIP
+			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
+
+		.PARAMETER SubnetIDs
+			AWS Only. Specify the subnet Id(s) the instance will be associated with.
+
+		.PARAMETER SubnetsHostProject
+			GCP Only. Host project for cross project network subnet.
+            
+		.PARAMETER Tags
+			AWS Only. The tags that will be associated with the instance.
+
+		.PARAMETER Disks
+			AWS only. Target machine disk properties. An array of objects with properties as follows:
+
+				IOPS: Int >= 0
+				TYPE: "COPY_ORIGIN", "STANDARD", "SSD", "PROVISIONED_SSD", "ST1", "SC1"
+				NAME: Disk name as appears in the source machine object.
+
+		.PARAMETER InstanceId
+			The id of the CE instance whose blueprint you want to update.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER PassThru
+			The updated blueprint will be returned to the pipeline.
+
+        .EXAMPLE
+            Set-CEBlueprint -InstanceId 47d842b8-ebfa-4695-90f8-fb9ab686c708 -Blueprint @{"IAMRole" = "EC2-InstanceProfile-Public"}
+
+			This adds or updates the IAMRole property for the blueprint to "EC2-InstanceProfile-Public" for the CE instance identified by 47d842b8-ebfa-4695-90f8-fb9ab686c708.
+
+		.EXAMPLE
+			Set-CEBlueprint -InstanceId 47d842b8-ebfa-4695-90f8-fb9ab686c708 -IAMRole "EC2-InstanceProfile-Public"
+
+			This adds or updates the IAMRole property for the blueprint to "EC2-InstanceProfile-Public" for the CE instance identified by 47d842b8-ebfa-4695-90f8-fb9ab686c708.
+
+        .INPUTS
+            None or System.Collections.Hashtable
+
+        .OUTPUTS
+           None or System.Management.Automation.PSCustomObject
+
+			The JSON representation of the return value:
+			{
+			  "iamRole": "string",
+			  "staticIp": "string",
+			  "tags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "publicIPAction": "ALLOCATE",
+			  "machineName": "string",
+			  "privateIPs": [
+				"string"
+			  ],
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
+			  "subnetsHostProject": "string",
+			  "instanceType": "string",
+			  "placementGroup": "string",
+			  "machineId": "string",
+			  "region": "string",
+			  "disks": [
+				{
+				  "iops": 0,
+				  "type": "COPY_ORIGIN",
+				  "name": "string"
+				}
+			  ],
+			  "privateIPAction": "CREATE_NEW",
+			  "staticIpAction": "EXISTING",
+			  "id": "string",
+			  "subnetIDs": [
+				"string"
+			  ]
+			}
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
+    [OutputType([PSCustomObject])]
+    Param(
+		[Parameter(Mandatory = $true)]
+        [System.Guid]$InstanceId = [System.Guid]::Empty,
+
+		[Parameter(Mandatory = $true, ParameterSetName = "Blueprint", ValueFromPipeline = $true, Position = 0)]
+		[System.Collections.Hashtable]$Blueprint = @{},
+
+		[Parameter()]
+		[ValidateSet("COPY_ORIGIN", "CREATE_NEW", "CUSTOM_IP")]
+		[System.String]$PrivateIPAction,
+
+		[Parameter()]
+		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBNET")]
+		[System.String]$PublicIPAction,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[System.Boolean]$RunAfterLaunch,
+
+		[Parameter()]
+		[ValidateSet("DONT_CREATE", "CREATE_NEW", "EXISTING", "IF_IN_ORIGIN")]
+		[System.String]$StaticIPAction,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[System.Collections.Hashtable]$Tags,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable[]]$Disks,
+
+		[Parameter(ParameterSetName = "GCP")]
+		[System.String]$SubnetsHostProject,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$MachineName,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty,
+
+		[Parameter()]
+		[Switch]$PassThru
+    )
+
+	DynamicParam {
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $DynSessionInfo = $script:Sessions.Get_Item($Session)
+			$DynSession = $Session
+        }
+        else {
+            $DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $DynSession = $DynSessionInfo.User.Username
+        }
+
+		# Create the dictionary 
+        [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
+		
+		if ($InstanceId -ne $null -and $InstanceId -ne [System.Guid]::Empty) 
+		{
+			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud -Session $DynSession | ConvertTo-Hashtable
+			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Session $DynSession -Id $InstanceId | ConvertTo-Hashtable
+
+			#region InstanceType
+
+			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet $CECloud.InstanceTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+			#endregion
+
+			switch ($CECloud.Cloud)
+			{
+				"AWS" {
+
+					#region IAMRole
+
+					$IAMSet = $CECloud.IAMRoles
+					$IAMSet += [System.String]::Empty
+
+					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $IAMSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        
+					#endregion
+
+					if ($CECloud.PlacementGroups.Length -gt 0)
+					{
+						#region PlacementGroup
+
+						$PlacementSet = $CECloud.PlacementGroups
+						$PlacementSet += [System.String]::Empty
+
+						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $PlacementSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        
+						#endregion
+					}
+		
+					if ($CECloud.Subnets.Length -gt 0) 
+					{
+						#region SubnetIDs
+
+						$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
+						$SubnetSet += "Default"
+
+						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+						#endregion
+					}
+
+					if ($PrivateIPAction -eq "CUSTOM_IP" -or $ExistingBlueprint.PrivateIPAction -eq "CUSTOM_IP")
+					{
+						#region PrivateIPs
+
+						New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -Mandatory:($PrivateIPAction -eq "CUSTOM_IP") -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+						#endregion
+					}
+
+					$Type = Import-UnboundParameterCode -PassThru
+					$Subnets = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.Object]).Invoke($Type, @($PSCmdlet, "SubnetIDs", -1))
+
+					$Key = [System.String]::Empty
+
+					if ($Subnets -is [System.Array])
+					{
+						$Key = $Subnets[0]
+					}
+					elseif ($Subnets -is [System.String])
+					{
+						if (-not [System.String]::IsNullOrEmpty($Subnets))
+						{
+							$Key = $Subnets
+						}
+					}
+
+					$Subnet = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -ieq $Key -or $_.Id -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
+
+					if ($Subnet -ne $null -or ($ExistingBlueprint.SubnetIDs -ne $null -and $ExistingBlueprint.SubnetIDs.Length -gt 0))
+					{
+						# Set the network Id based on the selected subnet so we can get the right security groups as options
+						if ($Subnet -ne $null) {
+							$VpcId = $Subnet.NetworkId
+						}
+						else {
+							$VpcId = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Id -ieq $ExistingBlueprint.SubnetIDs[0]} | Select-Object -First 1 -ErrorAction SilentlyContinue
+						}
+
+						#region SecurityGroups
+
+						$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -eq $VpcId}
+						$SGSet += [System.String]::Empty
+
+						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        
+						#endregion
+					}
+
+					break
+				}
+				"GCP" {
+
+					break
+				}
+				"Azure" {
+
+					break
+				}
+				default {
+					throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
+				}
+			}
+
+			if ($StaticIPAction -eq "EXISTING" -or $ExistingBlueprint.StaticIPAction -eq "EXISTING")
+			{
+				#region EIP
+
+				New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory:($StaticIPAction -eq "EXISTING") -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+				#endregion
+			}
+		}
+
+		return $RuntimeParameterDictionary
+	}
+
+    Begin {      
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Session $Session -Id $InstanceId | ConvertTo-Hashtable
+
+			# If a blueprint hashtable wasn't provided, build one for the parameter set being used
+			if ($PSCmdlet.ParameterSetName -ne "Blueprint")
+			{
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
+
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
+
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
+
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
+
+				$Blueprint = @{}
+
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
+				{
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the blueprint object
+
+							if ($Item.Key -eq "Tags")
+							{
+								$Tags = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+								}
+
+								$Blueprint.Add($Item.Key, $Tags)
+							}
+							else {
+								$Blueprint.Add($Item.Key, $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
+				}
+			}
+
+			# Merge the original and new blueprint
+			[System.Collections.Hashtable]$NewBluePrint = Merge-HashTables -Source $ExistingBlueprint -Update $Blueprint
+
+            if ($NewBluePrint.StaticIPAction -ne "EXISTING") {
+                $NewBluePrint.StaticIP = ""
+            }
+
+            if ($NewBluePrint.PrivateIPAction -ne "CUSTOM_IP") {
+                $NewBluePrint.PrivateIPs = @()
+            }
+
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/blueprints/$($NewBluePrint.Id)"
+
+			$ConfirmMessage = "Are you sure you want to update the blueprint configuration?"
+
+			$WhatIfDescription = "Updated blueprint to $(ConvertTo-Json -InputObject $NewBluePrint)"
+			$ConfirmCaption = "Update Blueprint"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Body (ConvertTo-Json -InputObject $NewBluePrint) -ContentType "application/json" -Method Patch -WebSession $SessionInfo.Session
+        
+				if ($PassThru)
+				{
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+				}
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+#endregion
+
+#region Replication Configuration
+
+Function Get-CEMachineRecoveryPoints {
+	<#
+		.SYNOPSIS
+			Returns the list of available recovery points for the specified machine.
+
+		.DESCRIPTION
+			Returns the list of available recovery points for the specified machine.
+
+			This is only available if the license type is DR.
+
+		.PARAMETER InstanceId
+			The CE instance to retrieve recovery points in time information about.
+
+		.PARAMETER Offset
+			With which item to start (0 based).
+
+		.PARAMETER Limit
+			A number specifying how many entries to return between 0 and 1500 (defaults to 1500).
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+        .EXAMPLE
+			Get-CEMachineRecoveryPoints -InstanceId 47d842b8-ebfa-4695-90f8-fb9ab686c708
+
+			This gets a list of the recovery points for the specified instance.
+
+		.EXAMPLE
+			Get-CEMachineRecoveryPoints -InstanceId 47d842b8-ebfa-4695-90f8-fb9ab686c708 -Offset 1501 -Limit 50
+
+			This gets a list of the recovery points for the specified instance from index 1501 to 1551.
+
+        .INPUTS
+            System.Guid
+
+        .OUTPUTS
+           System.Management.Automation.PSCustomObject[]
+			
+			The JSON representation of the array:
+			[
+				{
+					"id": "string",
+					"dateTime": "2017-09-06T01:39:46Z"
+				}
+			]
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+	#>
+	[CmdletBinding()]
+	Param(
+		[Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+		[ValidateNotNullOrEmpty()]
+		[System.Guid]$InstanceId,
+
+		[Parameter()]
+		[ValidateRange(0, [System.UInt32]::MaxValue)]
+		[System.UInt32]$Offset = 0,
+
+		[Parameter()]
+		[ValidateRange(0, 1500)]
+		[System.UInt32]$Limit = 1500,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+	)
+
+	Begin {
+	}
+
+	Process {
+		$SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session.ToLower())
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/$InstanceId/pointsintime"
+
+			if ($Offset -gt 0 -or $Limit -lt 1500)
+			{
+				$QueryString = [System.String]::Empty
+
+				if ($Offset -gt 0)
+				{
+					$QueryString += "&offset=$Offset"
+				}
+
+				if ($Limit -lt 1500)
+				{
+					$QueryString += "&limit=$Limit"
+				}
+
+				# Remove the first character which is an unecessary ampersand
+				$Uri += "?$($QueryString.Substring(1))"
+			}
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content).Items
+		}
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+
+	}
+}
+
+Function New-CEReplicationConfiguration {
+	<#
+		.SYNOPSIS
+			Creates a new CE replication configuration.
+
+		.DESCRIPTION
+			This cmdlet is used to create a new CE replication configuration for a specific CE account.
+
+		.PARAMETER ProxyUrl
+			The full URI for a proxy (schema, username, password, domain, port) if required for the CloudEndure agent. Leave blank to not use a proxy.
+
+		.PARAMETER SubnetId
+			Subnet where replication servers will be created.
+
+		.PARAMETER UsePrivateIp
+			Should the CloudEndure agent access the replication server using its private IP address. Set this parameter to true to use a VPN, DirectConnect, ExpressRoute, or GCP Carrier Interconnect/Direct Peering.
+
+		.PARAMETER VolumeEncryptionKey
+			AWS only. ARN to private key for volume encryption.
+
+		.PARAMETER ReplicationTags
+			AWS only. Tags that will be applied to every cloud resource created in the CloudEndure staging area.
+
+		.PARAMETER SubnetHostProject
+			GCP only. Host project of cross project network subnet.
+
+		.PARAMETER ReplicatorSecurityGroupIDs
+			AWS only. The security groups that will be applied to the replication servers.
+
+		.PARAMETER Config
+			You can provide a replication config with these properties:
+
+			{
+			  "volumeEncryptionKey": "string",
+			  "replicationTags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "subnetHostProject": "string",
+			  "replicatorSecurityGroupIDs": [
+				"string"
+			  ],
+			  "usePrivateIp": true,
+			  "proxyUrl": "string",
+			  "cloudCredentials": "string",
+			  "subnetId": "string",
+			  "region" : "string"
+			}
+
+            You cannot specify an updated Source as part of the config file, you must specify that separately.
+
+		.PARAMETER Source
+			The source identifier for replication. 
+
+		.PARAMETER Target
+			The destination indentifier for replication.			
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER PassThru
+			Specify to return the updated config to the pipeline.
+
+		.EXAMPLE
+			New-CEReplicationConfiguration -SubnetId "subnet-421d476c" -Target "us-east-1" -Source "Generic"
+
+			Creates a new CE replication configuration to specify that replication will be sent to AWS US-East-1, replication servers should be deployed in subnet-421d476c, and the source is a generic location.
+
+		.INPUTS
+            None or System.Collections.Hashtable
+
+        .OUTPUTS
+           None or System.Management.Automation.PSCustomObject
+
+			The JSON representation of the return value:
+			{
+			  "volumeEncryptionKey": "string",
+			  "replicationTags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "subnetHostProject": "string",
+			  "replicatorSecurityGroupIDs": [
+				"string"
+			  ],
+			  "usePrivateIp": true,
+			  "region": "string",
+			  "proxyUrl": "string",
+			  "cloudCredentials": "string",
+			  "subnetId": "string",
+			  "id": "string"
+			}
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
+	[OutputType([PSCustomObject])]
+    Param(
+		[Parameter(ParameterSetName = "Config", Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$Config = @{},
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [System.String]$ProxyUrl,
+
+        [Parameter()]
+        [System.Boolean]$UsePrivateIp = $false,
+
+        [Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNullOrEmpty()]
+        [System.String]$VolumeEncryptionKey,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$ReplicationTags,
+
+		[Parameter(ParameterSetName = "GCP")]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$SubnetHostProject,
+
+		[Parameter()]
+		[Switch]$PassThru,
+
+		[Parameter()]
+		[Switch]$Force,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+	DynamicParam {
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+			$DynSessionInfo = $script:Sessions.Get_Item($Session)
+			$DynSession = $Session
+		}
+		else {
+			$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$DynSession = $DynSessionInfo.User.Username
+		}
+
+		[System.Collections.Hashtable]$RegionMapping = @{"Generic" = "f54420d5-3de4-40bb-b35b-33d32ad8c8ef"}
+
+		[PSCustomObject[]]$CERegions = Get-CECloudRegion -Session $DynSession 
+
+        # Create the dictionary 
+		$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
+
+		#region Source - The source isn't defined as part of the replication config
+
+		New-DynamicParameter -Name "Source" -Type ([System.String]) -ValidateSet ($RegionMapping.GetEnumerator() | Select-Object -ExpandProperty Key) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+		#endregion
+		
+		# If a config wasn't provided, add target specific parameters
+		if ($Config -eq $null -or $Config -eq @{})
+		{
+			#region Target
+
+			[System.Collections.ArrayList]$TargetSet = $CERegions | Select-Object -ExpandProperty Name
+			$TargetSet.Remove("Generic")
+
+			New-DynamicParameter -Name "Target" -Type ([System.String]) -ValidateSet $TargetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+			#endregion
+
+			# Import the unbound parameter checking code from HostUtilities
+			$Type = Import-UnboundParameterCode -PassThru
+			[System.String]$TargetRegionName = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "Target", -1))
+
+			if (-not [System.String]::IsNullOrEmpty($TargetRegionName))
+			{
+				$Region = $CERegions | Where-Object {$_.Name -eq $TargetRegionName}
+
+				if ($Region -ne $null)
+				{
+					$TargetRegion = $Region | Select-Object -First 1 
+					$RegionSubnets = $TargetRegion | Select-Object -ExpandProperty Subnets
+
+					#region SubnetId					
+
+					# Allow user to specify either the long name or the subnet id in the parameter
+					[System.String[]]$SubnetSet = $TargetRegion | Select-Object -First 1 -ExpandProperty Subnets | Select-Object -ExpandProperty Name
+					$SubnetSet += $CERegions | Where-Object {$_.Id -eq $TargetRegionId } | Select-Object -First 1 -ExpandProperty Subnets | Select-Object -ExpandProperty SubnetId
+
+					New-DynamicParameter -Name "SubnetId" -Type ([System.String]) -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+
+					[System.String]$Cloud = $CERegions | Where-Object {$_.Id -eq $TargetRegionId} | Select-Object -First 1 -ExpandProperty Cloud
+
+					# ReplicatorSecurityGroupIDs is only an option for AWS as is VolumeEncryptionKey
+					if ($Cloud -eq "AWS")
+					{
+						#region KMS
+
+						$KMSSet = $TargetRegion | Select-Object -ExpandProperty VolumeEncryptionKeys | Where-Object {$_.KeyArn -ne $null} | Select-Object -ExpandProperty KeyArn
+						$KMSSet += "Default"
+
+						New-DynamicParameter -Name "VolumeEncryptionKey" -ValidateSet $KMSSet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+						#endregion
+
+						[System.String]$SubnetId = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "SubnetId", -1))
+
+						if (-not [System.String]::IsNullOrEmpty($SubnetId))
+						{
+							# Since we allowed the user to specify either the subnetid or the long name, we need to check which one
+							# was specified
+
+							$VpcId = $RegionSubnets | Where-Object {$_.Name -eq $SubnetId -or $_.Id -eq $SubnetId} | Select-Object -ExpandProperty NetworkId -ErrorAction SilentlyContinue
+
+							# If we found the subnet, and we found the VPC, populate security groups
+							# If it wasn't found, either the subnet provided was "Default" or not a recognized value
+							if (-not [System.String]::IsNullOrEmpty($VpcId))
+							{
+								#region SecurityGroups
+
+								$SGSet = $TargetRegion | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.NetworkId -eq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
+								$SGSet += [System.String]::Empty
+
+								New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+								#endregion
+							}
+						}
+					}
+				}
+			}
+		}
+        
+        return $RuntimeParameterDictionary
+	}
+
+	Begin {		
+	}
+
+	Process {		
+		# Get all of the dynamic params into variables
+		[System.String]$Target = $PSBoundParameters["Target"]
+		[System.String]$Source = $PSBoundParameters["Source"]
+		
+		# Make sure a target or destination was specified
+		if ([System.String]::IsNullOrEmpty($Source) -and [System.String]::IsNullOrEmpty($Target) -and [System.String]::IsNullOrEmpty($Config["region"]))
+		{
+			throw "A new source and/or target must be specified to create a new replication configuration."
+		}
+
+		$SessionInfo = $null
+
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+			$SessionInfo = $script:Sessions.Get_Item($Session)
+		}
+		else {
+			$SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+		}
+
+		if ($SessionInfo -ne $null) 
+		{
+			[PSCustomObject[]]$CERegions = Get-CECloudRegion -Session $Session 
+
+			# This is the default set of properties we can specify for a new replication config
+			$DefaultConfig = @{
+				"cloudCredentials" = "$($SessionInfo.CloudCredentials)";
+                "region" = "";
+                "subnetId" = "";
+				"subnetHostProject" = "";
+                "replicatorSecurityGroupIDs" = @();
+                "volumeEncryptionKey" = "";
+                "replicationTags" = @();
+                "usePrivateIp" = $false;
+                "proxyUrl" = ""
+            }
+                    
+			# If a config hashtable wasn't provided, build one for the parameter set being used
+			if ($PSCmdlet.ParameterSetName -ne "Config")
+			{
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
+
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
+
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
+
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
+
+				$Config = @{}
+
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
+                {
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the config
+							
+							if ($Item.Key -eq "ReplicationTags")
+							{
+								$Tags = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+								}
+
+								$Config.Add($Item.Key, $Tags)
+							}
+                            # The friendly name or the id of the subnet was provided at the command line
+                            elseif ($Item.Key -eq "SubnetId") 
+							{
+								[System.String]$SubnetId = $CERegions | Where-Object {$_.Name -eq $Target} | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -eq $PSBoundParameters["SubnetId"] -or $_.Id -eq $PSBoundParameters["SubnetId"]} | Select-Object -First 1 -ExpandProperty Id
+
+								if (-not [System.String]::IsNullOrEmpty($SubnetId))
+								{
+									$Config.Add($Item.Key, $SubnetId)
+								}
+							}
+							else 
+							{
+								$Config.Add($Item.Key, $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
+				}
+			}
+
+			# Merge the updated parameters specified with the default settings
+			# This ensures our request has all required properties, even if some are blank
+            $Config = Merge-Hashtables -Source $DefaultConfig -Update $Config
+
+			# We need the project to see the original source
+            [System.Collections.Hashtable]$CurrentProject = Get-CEProject -Session $Session | ConvertTo-Hashtable
+
+			# We need the current replication config to see the original target
+            [System.collections.Hashtable]$CurrentConfig = Get-CEReplicationConfiguration -Id $CurrentProject["replicationConfiguration"] -Session $Session | ConvertTo-Hashtable
+
+			# Build the confirmation messages with warnings about updates to source and destination
+            $ConfirmMessage = "The action you are about to perform is destructive!"
+
+            if (-not [System.String]::ISNullOrEmpty($Source))
+            {        
+				$OriginalSrc = $CurrentProject["source"]
+                $OriginalSource = $CERegions | Where-Object {$_.Id -eq $OriginalSrc } | Select-Object -First 1 -ExpandProperty Name
+                    
+                # Do this second so we don't overwrite the original source for the confirm message
+				# This will set the updated source for the PATCH request
+                $CurrentProject["source"] = $CERegions | Where-Object {$_.Name -eq $Source} | Select-Object -First 1 -ExpandProperty Id
+
+                $ConfirmMessage += "`r`n`r`nChanging your Live Migration Source from $OriginalSource to $Source will cause all current instances to be disconnected from CloudEndure: you will need to reinstall the CloudEndure Agent on all the instances and data replication will restart from zero."
+            }
+
+            if (-not [System.String]::IsNullOrEmpty($Target) -or -not [System.String]::IsNullOrEmpty($Config["region"]))
+            {
+				# If a config with a region wasn't specified, get it from the Target specified
+				# The RegionMapping table was built during the dynamic params evaluation
+				if ([System.String]::IsNullOrEmpty($Config["region"]))
+				{
+					$Config["region"] = $CERegions | Where-Object {$_.Name -eq $Target} | Select-Object -First 1 -ExpandProperty Id
+				}
+
+                $OriginalTarget = $CERegions | Where-Object {$_.Id -eq $CurrentConfig["region"] } | Select-Object -First 1 -ExpandProperty Name
+
+                $ConfirmMessage += "`r`n`r`nChanging your Live Migration Target from $OriginalTarget to $Target will cause all current instances to be disconnected from CloudEndure: you will need to reinstall the CloudEndure Agent on all the instances and data replication will restart from zero."
+            }
+
+            $ConfirmMessage += "`r`n`r`nAre you sure you want to continue?"
+			$WhatIfDescription = "New replication configuration created: $(ConvertTo-Json -InputObject $Config)"
+			$ConfirmCaption = "Create New Replication Configuration"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+                # Send the post request to create a new replication configuration if a new target region was specified
+                if (-not [System.String]::IsNullOrEmpty($Config["region"]))
+                {
+					if ($Config["region"] -ne $Currentconfig["region"] )
+					{
+						Write-Verbose -Message "Sending config $(ConvertTo-Json $Config)"
+						[System.String]$PostUri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations"
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$PostResult = Invoke-WebRequest -Uri $PostUri -Method Post -Body (ConvertTo-Json -InputObject $Config) -ContentType "application/json" -WebSession $SessionInfo.Session
+
+						if ($PostResult.StatusCode -ne 201)
+						{
+							# Make sure we don't send the patch request if this failed
+							throw "Failed to create new Replication Configuration with error: $($PostResult.StatusCode) $($PostResult.StatusDescription) - $($PostResult.Content)"
+						}
+						else
+						{
+							Write-Verbose -Message $PostResult.Content
+							# Update the project with the new replication configuration Id to supply in the PATCH request
+							$CurrentProject["replicationConfiguration"] = (ConvertFrom-Json -InputObject $PostResult.Content).Id
+						}
+					}
+					else
+					{
+						Write-Warning -Message "The specified target region $OriginalTarget is the same as the current region, no update made."
+					}
+                }
+
+				# Make sure a new source that was different than the old one was specified or that the target region is new meaning that the replication configuration
+				# id has changed
+				if ((-not [System.String]::IsNullOrEmpty($Source) -and $CurrentProject["source"] -ne $OriginalSrc) -or $Config["region"] -ne $Currentconfig["region"])
+				{
+					# Send the patch request to update the project data with the new source, if provided, or the new replication configuration
+					# At least 1 of them changed, so we'll always need to send this patch request
+					[System.String]$PatchUri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)"
+
+					# Don't specify the type of project in the update, it's fixed based on the type of account CE sets up
+					$CurrentProject.Remove("type")
+
+					Write-Verbose -Message "Sending updated project $(ConvertTo-Json $CurrentProject)"
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$PatchResult = Invoke-WebRequest -Uri $PatchUri -Method Patch -Body (ConvertTo-Json -InputObject $CurrentProject) -ContentType "application/json" -WebSession $SessionInfo.Session
+
+					if ($PatchResult.StatusCode -ne 200)
+					{
+						throw "The project information patch request failed, you will need to retry updating this item if you selected a different target environment as the project and replication configurations are now out of sync."
+					}
+					else 
+					{
+						Write-Verbose -Message $PatchResult.Content
+					}
+				}
+				else
+				{
+					Write-Warning -Message "Either no new source specified or no new target specified."
+				}
+            }
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+	}
+}
+
+Function Get-CEReplicationConfiguration {
+	<#
+        .SYNOPSIS
+           Gets the replication configuration.
+
+        .DESCRIPTION
+            The cmdlet retrieves information about the replication configuration.
+
+		.PARAMETER Id
+			The id of the replication configuration to retrieve. If this is not specified, all replication configurations will be returned.
+
+		.PARAMETER Offset
+			With which item to start (0 based).
+
+		.PARAMETER Limit
+			A number specifying how many entries to return between 0 and 1500 (defaults to 1500).
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+            
+        .EXAMPLE
+            Get-CEReplicationConfiguration
+
+            Retrieves the replication configuration of the current account.
+
+        .INPUTS
+            None or System.Guid
+
+        .OUTPUTS
+			System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
+
+			The JSON representation of the array:
+			[
+				{
+				  "volumeEncryptionKey": "string",
+				  "replicationTags": [
+					{
+					  "key": "string",
+					  "value": "string"
+					}
+				  ],
+				  "subnetHostProject": "string",
+				  "replicatorSecurityGroupIDs": [
+					"string"
+				  ],
+				  "usePrivateIp": true,
+				  "region": "string",
+				  "proxyUrl": "string",
+				  "cloudCredentials": "string",
+				  "subnetId": "string",
+				  "id": "string"
+				}
+			]
+			
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(DefaultParameterSetName = "List")]
+    [OutputType([PSCustomObject], [PSCustomObject[]])]
+    Param(
+		[Parameter(ValueFromPipeline = $true, Mandatory = $true, ParameterSetName="Get")]
+		[System.Guid]$Id = [System.Guid]::Empty,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, [System.UInt32]::MaxValue)]
+		[System.UInt32]$Offset = 0,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, 1500)]
+		[System.UInt32]$Limit = 1500,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{			
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations"
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					# This REST API doesn't support supplying the Id as part of the URL
+
+					$Offset = 0
+					$Limit = 1500
+
+					[System.UInt32]$Count = $Limit
+					[System.Int32]$ResultCount = 0;
+					[System.Boolean]$Found = $false
+
+					# Go until the results returned are less than the specified limit or the loop
+					# breaks when the config is found
+					while ($Count -ge $ResultCount)
+					{
+						Write-Verbose -Message "Querying replication configurations from $Offset to $($Offset + $Limit)."
+
+						[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
+						[System.String]$TempUri = "$Uri$QueryString"
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $TempUri -Method Get -WebSession $SessionInfo.Session
+
+						[PSCustomObject[]]$Content = ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+						$ResultCount = $Content.Length
+
+						$ReplConfig = $Content | Where-Object {$_.Id -ieq $Id.ToString()}
+
+						if ($ReplConfig -ne $null)
+						{
+							Write-Output -InputObject ([PSCustomObject]($ReplConfig | Select-Object -First 1))
+							$Found = $true
+							break
+						}
+						else
+						{
+							$Offset += $Limit
+						}
+					}
+
+					if (-not $Found)
+					{
+						Write-Warning -Message "The replication configuration with Id $Id was not found."
+					}
+
+					break
+				}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+					Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+
+					break
+				}
+				default {
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+Function Set-CEReplicationConfiguration {
+    <#
+		.SYNOPSIS
+			Sets the CE replication configuration.
+
+		.DESCRIPTION
+			This cmdlet is used to set the CE replication configuration options for a specific CE account.
+
+			Modifying volumeEncryptionKey or modifying cloudCredentials to ones matching a different cloud account will result in replication restarting from initial sync.
+
+		.PARAMETER Id
+			The replication configuration id.
+
+		.PARAMETER ProxyUrl
+			The full URI for a proxy (schema, username, password, domain, port) if required for the CloudEndure agent. Leave blank to not use a proxy.
+
+		.PARAMETER SubnetId
+			Specify the subnet Id that the replication servers will be launched in.
+
+		.PARAMETER UsePrivateIp
+			Set this parameter to true to use a VPN, DirectConnect, ExpressRoute, or GCP Carrier Interconnect/Direct Peering.
+
+		.PARAMETER VolumeEncryptionKey
+			AWS only. ARN to private key for volume encryption.
+
+		.PARAMETER ReplicationTags
+			AWS Only. Specify the tags that will be applied to CE replication resources.
+
+		.PARAMETER SubnetHostProject
+			GCP only. Host project of cross project network subnet.
+
+		.PARAMETER Config
+			You can provide a replication config with these properties:
+
+			{
+			  "volumeEncryptionKey": "string",
+			  "replicationTags": [
+				{
+				  "key": "string",
+				  "value": "string"
+				}
+			  ],
+			  "subnetHostProject": "string",
+			  "replicatorSecurityGroupIDs": [
+				"string"
+			  ],
+			  "usePrivateIp": true,
+			  "proxyUrl": "string",
+			  "cloudCredentials": "string",
+			  "subnetId": "string"
+			}
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER PassThru
+			Specify to return the updated config to the pipeline.
+
+		.EXAMPLE
+			Set-CEReplicationConfiguration -Id 8cdf36d4-6668-44a9-9cfe-16cb93538a79 -SubnetId "subnet-421d476c"
+
+			Updates the existing replication configuration to specify that replication servers should be deployed in subnet-421d476c.
+
+		.INPUTS
+            None
+
+        .OUTPUTS
+           None or System.Management.Automation.PSCustomObject
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
+	[OutputType([PSCustomObject])]
+    Param(
+        [Parameter(Mandatory = $true)]
+        [System.Guid]$Id,
+
+		[Parameter(ParameterSetName = "Config", Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$Config = @{},
+
+        [Parameter()]
+        [ValidateNotNull()]
+        [System.String]$ProxyUrl,
+
+        [Parameter()]
+        [System.Boolean]$UsePrivateIp,
+
+		[Parameter(ParameterSetName = "AWS")]
+		[System.Collections.Hashtable]$ReplicationTags,
+
+		[Parameter()]
+		[Switch]$PassThru,
+
+		[Parameter()]
+		[Switch]$Force,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+	DynamicParam {
+		if ($Config -eq $null -or $Config -eq @{})
+		{
+			if (-not [System.String]::IsNullOrEmpty($Session)) {
+				$DynSessionInfo = $script:Sessions.Get_Item($Session)
+				$DynSession = $Session
+			}
+			else {
+				$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+				$DynSession = $DynSessionInfo.User.Username
+			}
+
+			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud -Session $DynSession | ConvertTo-Hashtable
+
+			# Create the dictionary 
+			$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
+		
+			if ($Id -ne $null -and $Id -ne [System.Guid]::Empty) 
+			{
+				if ($CECloud.Subnets.Length -gt 0) 
+				{
+					#region SubnetId
+
+					# Allow user to specify either the long name or the subnet id in the parameter
+					[System.String[]]$SubnetSet = $CECloud | Select-Object -ExpandProperty Subnets | Select-Object -ExpandProperty Name
+					$SubnetSet += $CECloud | Select-Object -ExpandProperty Subnets | Select-Object -ExpandProperty SubnetId
+
+					New-DynamicParameter -Name "SubnetId" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+				}
+
+				switch ($CECloud.Cloud)
+				{
+					"AWS" {
+
+						if ($CECloud.VolumeEncryptionKeys.Length -gt 0)
+						{
+							#region KMS
+
+							[System.Collections.ArrayList]$KMSSet = $CECloud | Select-Object -ExpandProperty VolumeEncryptionKeys | Where-Object {$_.KeyArn -ne $null } | Select-Object -ExpandProperty KeyArn
+							$KMSSet += "Default"
+							$KMSSet += [System.String]::Empty
+
+							New-DynamicParameter -Name "VolumeEncryptionKey" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $KMSSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+							#endregion
+						}
+
+						$Type = Import-UnboundParameterCode -PassThru
+						# The subnet Id here is the verbose version of the subnet selected by the user
+						[System.String]$SubnetId = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "SubnetId", -1))
+			
+						if ([System.String]::IsNullOrEmpty($SubnetId))
+						{
+							[System.Collections.Hashtable]$ExistingConfig = Get-CEReplicationConfiguration -Id $Id | ConvertTo-Hashtable
+
+							if (-not [System.String]::IsNullOrEmpty($ExistingConfig.SubnetId))
+							{
+								$SubnetId = $ExistingConfig.SubnetId
+							}
+						}
+
+						$VpcId = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -eq $SubnetId -or $_.Id -eq $SubnetId} | Select-Object -ExpandProperty NetworkId -ErrorAction SilentlyContinue
+
+						# If we found the subnet, and we found the VPC, populate security groups
+						# If it wasn't found, either the subnet provided was "Default" or not a recognized value
+						# then we won't populate security groups since the only option is create new
+						if (-not [System.String]::IsNullOrEmpty($VpcId))
+						{
+							#region SecurityGroups
+							$SGSet = $CECloud | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.NetworkId -eq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
+							$SGSet += [System.String]::Empty
+
+							New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+							#endregion
+						}
+
+						break
+					}
+					"GCP" {
+						# Do nothing
+						break
+					}
+					"Azure" {
+						# Do nothing
+						break
+					}
+					default {
+						throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
+					}
+				}
+			}
+
+			return $RuntimeParameterDictionary
+		}
+	}
+
+	Begin {
+	}
+
+	Process {
+		$SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.Collections.Hashtable]$ExistingConfig = Get-CEReplicationConfiguration -Id $Id -Session $Session | ConvertTo-Hashtable
+
+			# If a config hashtable wasn't provided, build one for the parameter set being used
+			if ($PSCmdlet.ParameterSetName -ne "Config")
+			{
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
+
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
+
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
+
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
+
+				$Config = @{}
+
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
+				{
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the config object
+
+							if ($Item.Key -ieq "ReplicationTags")
+							{
+								$Tags = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+								}
+
+								$Config.Add($Item.Key, $Tags)
+							}
+							elseif ($Item.Key -ieq "SubnetId") {
+								[System.String]$SubnetId = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -eq $PSBoundParameters["SubnetId"] -or $_.Id -eq $PSBoundParameters["SubnetId"]} | Select-Object -First 1 -ExpandProperty Id
+
+								if (-not [System.String]::IsNullOrEmpty($SubnetId))
+								{
+									$Config.Add($Item.Key, $SubnetId)
+								}
+							}
+							else {
+								$Config.Add($Item.Key, $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
+				}
+			}
+
+			# Merge the original and new blueprint
+			[System.Collections.Hashtable]$NewConfig = Merge-HashTables -Source $ExistingConfig -Update $Config
+
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations/$($Id.ToString())"
+
+			$ConfirmMessage = "Are you sure you want to update the replication configuration?"
+
+			$WhatIfDescription = "Updated configuration to $(ConvertTo-Json -InputObject $NewConfig)"
+			$ConfirmCaption = "Update Replication Configuration"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				Write-Verbose -Message "Sending updated config $(ConvertTo-Json -InputObject $NewConfig)"
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Patch -Body (ConvertTo-Json -InputObject $NewConfig) -ContentType "application/json" -WebSession $SessionInfo.Session
+	
+				if ($PassThru) 
+				{
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+				}
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+	}
+}
+
+Function Remove-CEReplicationConfiguration {
+	<#
+		.SYNOPSIS
+			Removes a replication configuration. NOT YET SUPPORTED!
+
+		.DESCRIPTION
+			This cmdlet removes a specified replication configuration. NOT YET SUPPORTED!
+
+		.PARAMETER Id
+			The id of the replication configuration to remove.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER PassThru
+			If specified, the deleted configuration is returned to the pipeline.
+
+		.EXAMPLE
+			Remove-CEReplicationConfiguration -Id 2ff58f32-cb82-4c41-accc-3001a104c560
+
+			Removes the replication configuration with the provided Id.
+
+		.INPUTS
+			System.Guid
+
+		.OUPUTS
+			None or System.Management.Automation.PSCustomObject
+
+		.NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 8/22/2017
+	#>
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
+	[OutputType([PSCustomObject])]
+    Param(
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [System.Guid]$Id,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty,
+
+		[Parameter()]
+		[Switch]$PassThru
+    )
+
+    Begin {
+		throw "Cmdlet not implemented."
+    }
+
+    Process {
+        $SessionInfo = $null
+
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+			$SessionInfo = $script:Sessions.Get_Item($Session)
+		}
+		else {
+			$SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+		}
+
+		if ($SessionInfo -ne $null) 
+		{
+            [System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations"
+            $Body = @{"id" = $Id.ToString()}
+
+			$ConfirmMessage = "You are about to remove replication configuration $Id."
+			$WhatIfDescription = "Removed replication configuration $Id"
+			$ConfirmCaption = "Delete CE Replication Configuration"
+			
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Delete -Body (ConvertTo-Json -InputObject $Body) -WebSession $SessionInfo.Session
+				Write-Verbose $Result.StatusCode
+				Write-Verbose $Result.Content
+
+				if ($PassThru)
+				{
+					Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+				}
+			}
+        }
+        else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+#endregion
+
+#region User
+
+Function Get-CEUser {
+	<#
+        .SYNOPSIS
+			Gets the current CloudEndure user information.
+
+        .DESCRIPTION
+			The cmdlet gets the current CloudEndure user information
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+            
+        .EXAMPLE
+            Get-CEUser
+
+            Gets the current user information.
+
+        .INPUTS
+            None
+
+        .OUTPUTS
+           PSCustomObject
+
+			This is a JSON representation of the returned value:
+			{
+			  "username": "user@example.com",
+			  "account": "string",
+			  "agentInstallationToken": "string",
+			  "settings": {
+				"sendNotifications": {
+				  "projectIds": [
+					"string"
+				  ]
+				}
+			  },
+			  "id": "string",
+			  "selfLink": "string"
+			}
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 8/24/2017
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    Param(
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/me"
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+Function Set-CEConsolePassword {
+	<#
+		.SYNOPSIS
+			Updates the password associated with the console logon.
+
+		.DESCRIPTION
+			The cmdlet updates the CE account password used to logon to the console.
+
+		.PARAMETER OldPassword
+			The current password for the account.
+
+		.PARAMETER NewPassword
+			The new password for the account. It must 8 characters or more, 1 upper, 1 lower, 1 numeric, and 1 special character.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.EXAMPLE
+			Set-CEConsolePassword -OldPassword MyOldP@$$w0rd -NewPassword @$3cureP@$$w0rd
+			
+			The cmdlet updates the password.
+
+		.INPUTS
+			PSObject
+
+		.OUTPUTS
+			None
+
+		.NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 8/24/2017
+	#>
+	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
+	[OutputType()]
+	Param(
+		[Parameter(Mandatory = $true, Position = 0, ValueFromPipelineByPropertyName = $true)]
+		[ValidateNotNullOrEmpty()]
+		[System.String]$OldPassword,
+
+		[Parameter(Mandatory = $true, Position = 1, ValueFromPipelineByPropertyName = $true)]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$_ -ne $OldPassword
+		})]
+		[ValidatePattern("^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[$@$!%*?&])[A-Za-z\d$@$!%*?&]{8,}")]
+		[System.String]$NewPassword,
+
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+	)
+
+	Begin {
+	}
+
+	Process {
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/changePassword"
+
+			$Body = @{
+				"oldPassword" = $OldPassword;
+				"newPassword" = $NewPassword
+			}
+
+			$ConfirmMessage = "Are you sure you want to update the console password?"
+			$WhatIfDescription = "Updated password for $Session."
+			$ConfirmCaption = "Update Console Password for $Session"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				Write-Verbose -Message "Sending updated config:`r`n $(ConvertTo-Json -InputObject $Body)"
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Post -Body (ConvertTo-Json -InputObject $Body) -ContentType "application/json" -WebSession $SessionInfo.Session
+
+				if ($Result.StatusCode -eq 204)
+				{
+					Write-Verbose -Message "Password successfully updated."
+					if ($PassThru)
+					{
+						Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content))
+					}
+				}
+				else
+				{
+					Write-Warning -Message "There was an issue with changing the password: $($Result.StatusCode) $($Result.StatusDescription) - $($Result.Content)"
+				}
+			}
+		}
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+	}
+}
+
+Function Set-CEEmailNotifications {
+	<#
+        .SYNOPSIS
+			Sets the email notification status.
+
+        .DESCRIPTION
+			The cmdlet either disables or enables email notifications.
+
+		.PARAMETER Enabled
+			Specifies that email notifications are enabled.
+
+		.PARAMETER Disabled
+			Specifies that email notifications are disabled.
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.PARAMETER PassThru
+			Will pass through the updated user config to the pipeline.
+            
+        .EXAMPLE
+            Set-CEEmailNotifications -Enabled
+
+			Enables email notifications for the current user.
+
+        .INPUTS
+            None
+
+        .OUTPUTS
+           None
+
+			This is a JSON representation of the returned value
+
+			{
+			  "username": "user@example.com",
+			  "account": "string",
+			  "agentInstallationToken": "string",
+			  "settings": {
+				"sendNotifications": {
+				  "projectIds": [
+					"string"
+				  ]
+				}
+			  },
+			  "id": "string",
+			  "selfLink": "string"
+			}
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject)]
+    Param(
+		[Parameter(Mandatory = $true, ParameterSetName = "Enabled")]
+		[Switch]$Enabled,
+
+		[Parameter(Mandatory = $true, ParameterSetName = "Disabled")]
+		[Switch]$Disabled,
+
+		[Parameter()]
+		[Switch]$PassThru,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/users/$($SessionInfo.User.Id)"
+
+			[System.String[]]$Ids = @()
+
+			if ($Enabled) {
+				$Ids += $SessionInfo.ProjectId
+			}
+
+			[System.String]$Body = ConvertTo-Json -InputObject @{"id" = $SessionInfo.User.Id; "settings" = @{"sendNotifications" = @{"projectIds" = $Ids}}} -Depth 3
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Patch -ContentType "application/json" -Body $Body -WebSession $SessionInfo.Session
+
+			if ($Result.StatusCode -eq 200) {
+				if ($Enabled) 
+				{
+					Write-Verbose -Message "Email notifications enabled for $($SessionInfo.User.Username)."
+				}
+				else 
+				{
+					Write-Verbose -Message "Email notifications disabled for $($SessionInfo.User.Username)."
+				}
+
+				if ($PassThru)
+				{
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+				}
+			}
+			else {
+				Write-Warning -Message "Email notifications could not be set properly, $($Result.StatusCode) - $($Result.StatusDescription) : $($Result.Content)"
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+#endregion
+
+#region Accounts
+
+Function Get-CEAccount {
+	<#
+		.SYNOPSIS
+			CloudEndure service account information.
+
+		.DESCRIPTION
+			CloudEndure service account information.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.EXAMPLE
+			Get-CEAccount
+
+			Gets the account data.
+
+		.INPUTS
+			None
+
+		.OUTPUTS
+			System.Management.Automation.PSCustomObject
+
+			This is a JSON representation of the returned object.
+			{
+			  "features": {
+				"awsExtendedHDDTypes": true,
+				"DRTier": true,
+				"pit": true,
+				"enableVolumeEncryption": true
+			  },
+			  "id": "string",
+			  "ceAdminProperties": {
+				"state": "ACTIVE",
+				"version": "string"
+			  }
+			}
+
+		.NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+	#>
+	[CmdletBinding()]
+	Param(
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+	)
+
+	Begin {
+	}
+
+	Process {
+		$SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/accounts/$($SessionInfo.User.Account)"
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+	}
+
+	End {
+
+	}
+}
+
+Function Get-CEAccountSummary {
+	<#
+		.SYNOPSIS
+			Retrieves summary data about the CE account.
+
+		.DESCRIPTION
+			This cmdlet retrieves a lot of information about the CE account including:
+
+			-Account (Features & Id)
+			-CloudCredentials (Id)
+			-Clouds (Configured cloud environments)
+			-DateTime (Current time)
+			-License
+			-Project
+			-Regions (Source & Target)
+			-ReplicationConfiguration
+			-User
+
+			This was the data originally returned by the celogin API call.
+
+		.PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+
+		.EXAMPLE
+			Get-CEAccountSummary
+
+			Gets account summary data.
+
+		.INPUTS
+			None
+
+		.OUTPUTS
+			PSCustomObject
+
+		 .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 8/24/2017
+
+	#>
+	 Param(
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/ceme"
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+#endregion
+
+#region Licenses
+
+Function Get-CELicense {
+	<#
+        .SYNOPSIS
+           Gets the current state of license information.
+
+        .DESCRIPTION
+            The cmdlet lists the license information about the specified account.
+
+		.PARAMETER Id
+			The Id of the license to retrieve.
+
+		.PARAMETER Offset
+			With which item to start (0 based).
+
+		.PARAMETER Limit
+			A number specifying how many entries to return between 0 and 1500 (defaults to 1500).
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+            
+        .EXAMPLE
+            Get-CELicense
+
+            Retrieves the licenses in the account using the default session context.
+
+        .INPUTS
+            None
+
+        .OUTPUTS
+           System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
+
+			This is a JSON representation of the returned array:
+			[
+				{
+				  "count": 0,
+				  "durationFromStartOfUse": "string",
+				  "used": 0,
+				  "expirationDateTime": "2017-09-06T01:39:46Z",
+				  "type": "MIGRATION",
+				  "id": "string"
+				}
+			]
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(DefaultParameterSetName = "List")]
+    [OutputType([PSCustomObject], [PSCustomObject[]])]
+    Param(
+		[Parameter(ValueFromPipeline = $true, ParameterSetName = "Get")]
+		[System.Guid]$Id = [System.Guid]::Empty,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, [System.UInt32]::MaxValue)]
+		[System.UInt32]$Offset = 0,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, 1500)]
+		[System.UInt32]$Limit = 1500,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/licenses"
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					if ($Id -ne [System.Guid]::Empty)
+					{
+						$Uri += "/$($Id.ToString())"
+					}
+					break
+				}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+					break
+				}
+				default {
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
+			}
+
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+        
+			if ($Id -ne [System.Guid]::Empty)
+			{
+				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+			}
+			else 
+			{
+				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+#endregion
+
+#region Project
+
+Function Get-CEProject {
+	<#
+        .SYNOPSIS
+			Gets basic information about the CE project.
+
+        .DESCRIPTION
+			The cmdlet retrieves basic information about the CE project in the CE account.
+
+		.PARAMETER Id
+			The Id of the project to retrieve. If this is not set, the current project for the user is returned.
+
+		.PARAMETER Offset
+			With which item to start (0 based).
+
+		.PARAMETER Limit
+			A number specifying how many entries to return between 0 and 1500 (defaults to 1500).
+
+        .PARAMETER Session
+            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
+            
+        .EXAMPLE
+            Get-CEProject
+
+            Retrieves all projects up to 1500.
+
+		.EXAMPLE
+			Get-CEProject -Current
+			
+			Retrieves data about the current project.
+
+        .INPUTS
+            None or System.Guid
+
+        .OUTPUTS
+           System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
+
+			This is a JSON representation of the returned array:
+			[
+				{
+				  "source": "string",
+				  "replicationConfiguration": "string",
+				  "id": "string",
+				  "name": "string",
+				  "type": "MIGRATION"
+				}
+			]
+
+        .NOTES
+            AUTHOR: Michael Haken
+			LAST UPDATE: 9/7/2017
+    #>
+    [CmdletBinding(DefaultParameterSetName = "List")]
+    [OutputType([PSCustomObject], [PSCustomObject[]])]
+    Param(
+		[Parameter(ParameterSetName = "Current")]
+		[Switch]$Current,
+
+		[Parameter(ValueFromPipeline = $true, Mandatory = "true", Position = 0, ParameterSetName = "Get")]
+		[System.Guid]$Id = [System.Guid]::Empty,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, [System.UInt32]::MaxValue)]
+		[System.UInt32]$Offset = 0,
+
+		[Parameter(ParameterSetName = "List")]
+		[ValidateRange(0, 1500)]
+		[System.UInt32]$Limit = 1500,
+
+        [Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateScript({
+			$script:Sessions.ContainsKey($_.ToLower())
+		})]
+        [System.String]$Session = [System.String]::Empty
+    )
+
+    Begin {        
+    }
+
+    Process {
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects"
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					if ($Id -ne [System.Guid]::Empty)
+					{
+						$Uri += "/$($Id.ToString())"
+					}
+					break
+				}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+					break
+				}
+				"Current" {
+					$Uri += "/$($SessionInfo.ProjectId)"
+					break
+				}
+				default {
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
+			}
+			
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+        
+			if ($PSCmdlet.ParameterSetName -eq "List")
+			{
+				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)				
+			}
+			else 
+			{
+				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
+
+    End {
+    }
+}
+
+#endregion
+
 Function Get-CEMachine {
      <#
         .SYNOPSIS
@@ -694,6 +3739,8 @@ Function Remove-CEMachine {
 
         .DESCRIPTION
             The cmdlet uninstalls the CloudEndure agent on the source instance, causes data replication to stop, and the instance will no longer appear in the CloudEndure Console.
+
+			All cloud artifacts associated with those machines with the exception of launched target machines are deleted.
 
 		.PARAMETER Ids
 			The Ids of the instances to remove from CloudEndure.
@@ -855,75 +3902,6 @@ Function Get-CEJobs {
     }
 }
 
-Function Get-CELicenses {
-	<#
-        .SYNOPSIS
-           Gets the current state of license information.
-
-        .DESCRIPTION
-            The cmdlet lists the license information about the specified account.
-
-        .PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-        .EXAMPLE
-            Get-CELicenses
-
-            Retrieves the licenses in the account using the default session context.
-
-        .INPUTS
-            None
-
-        .OUTPUTS
-           System.Management.Automation.PSCustomObject[]
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject[]])]
-    Param(
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/licenses"
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-        
-			Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
 Function Get-CECloudConfiguration {
 	<#
         .SYNOPSIS
@@ -993,1453 +3971,7 @@ Function Get-CECloudConfiguration {
     }
 }
 
-Function Get-CEReplicationConfiguration {
-	<#
-        .SYNOPSIS
-           Gets the replication configuration.
 
-        .DESCRIPTION
-            The cmdlet retrieves information about the replication configuration.
-
-		.PARAMETER Id
-			The id of the replication configuration to retrieve. If this is not specified, all replication configurations will be returned.
-
-        .PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-        .EXAMPLE
-            Get-CEReplicationConfiguration
-
-            Retrieves the replication configuration of the current account.
-
-        .INPUTS
-            None or System.Guid
-
-        .OUTPUTS
-           System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject], [PSCustomObject[]])]
-    Param(
-		[Parameter(ValueFromPipeline = $true)]
-		[System.Guid]$Id = [System.Guid]::Empty,
-
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			# This REST API doesn't support supplying the Id as part of the URL
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations"
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-        
-			if ($Id -ne [System.Guid]::Empty)
-			{
-				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content).Items | Where-Object {$_.Id -ieq $Id.ToString() } | Select-Object -First 1)
-			}
-			else
-			{
-				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
-			}
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
-Function Set-CEReplicationConfiguration {
-    <#
-		.SYNOPSIS
-			Sets the CE replication configuration.
-
-		.DESCRIPTION
-			This cmdlet is used to set the CE replication configuration options for a specific CE account.
-
-		.PARAMETER Id
-			The replication configuration id.
-
-		.PARAMETER ProxyUrl
-			The url of the source proxy to use for outbound connectivity. Specify a URL and port like https://myproxy.contoso.com:8443. Leave blank to not use a proxy.
-
-		.PARAMETER SubnetId
-			Specify the subnet Id that the replication servers will be launched in.
-
-		.PARAMETER UsePrivateIp
-			Set this parameter to true to use a VPN, DirectConnect, ExpressRoute, or GCP Carrier Interconnect/Direct Peering.
-
-		.PARAMETER VolumeEncryptionKey
-			Specify the KMS key to use to encrypt the EBS volumes being written to by the replication instances.
-
-		.PARAMETER ReplicationTags
-			Specify the tags that will be applied to CE replication resources.
-
-		.PARAMETER Config
-			You can provide a replication config with these properties:
-
-			{
-				"proxyUrl": "", 
-				"replicationTags": [
-					{"key": "keyName", "value": "keyValue"}
-				], 
-				"replicatorSecurityGroupIDs": [
-					"sg-b4c724c4"
-				], 
-				"subnetId": "subnet-421d476c", 
-				"usePrivateIp": false, 
-				"volumeEncryptionKey": ""
-			}
-
-		.PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-
-		.PARAMETER PassThru
-			Specify to return the updated config to the pipeline.
-
-		.EXAMPLE
-			Set-CEReplicationConfiguration -Id 8cdf36d4-6668-44a9-9cfe-16cb93538a79 -SubnetId "subnet-421d476c"
-
-			Updates the existing replication configuration to specify that replication servers should be deployed in subnet-421d476c.
-
-		.INPUTS
-            None
-
-        .OUTPUTS
-           None or System.Management.Automation.PSCustomObject
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/22/2017
-    #>
-    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
-	[OutputType([PSCustomObject])]
-    Param(
-        [Parameter(Mandatory = $true)]
-        [System.Guid]$Id,
-
-		[Parameter(ParameterSetName = "Config", Mandatory = $true)]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable]$Config = @{},
-
-        [Parameter(ParameterSetName = "IndividualAWS")]
-        [ValidateNotNull()]
-        [System.String]$ProxyUrl,
-
-        [Parameter(ParameterSetName = "IndividualAWS")]
-        [System.Boolean]$UsePrivateIp,
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[System.Collections.Hashtable]$ReplicationTags,
-
-		[Parameter()]
-		[Switch]$PassThru,
-
-		[Parameter()]
-		[Switch]$Force,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-	DynamicParam {
-		if ($Config -eq $null -or $Config -eq @{})
-		{
-			if (-not [System.String]::IsNullOrEmpty($Session)) {
-				$DynSessionInfo = $script:Sessions.Get_Item($Session)
-				$DynSession = $Session
-			}
-			else {
-				$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-				$DynSession = $DynSessionInfo.User.Username
-			}
-
-			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud -Session $DynSession | ConvertTo-Hashtable
-
-			# Create the dictionary 
-			$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
-		
-			if ($Id -ne $null -and $Id -ne [System.Guid]::Empty) 
-			{
-				switch ($CECloud.Cloud)
-				{
-					"AWS" {
-						$SubnetMapping = @{}
-						$VpcMapping = @{}
-			
-						$CECloud.Subnets | ForEach-Object {
-							if ($_.Name -ne "Default") {
-								$SubnetMapping.Add($_.Name, $_.SubnetId)
-								$VpcMapping.Add($_.SubnetId, $_.NetworkId)
-							}
-						}
-
-						$private:NetworkId = ""
-
-						if ($CECloud.Subnets.Length -gt 0) 
-						{
-							#region SubnetIDs
-
-							New-DynamicParameter -Name "SubnetId" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet ($CECloud.Subnets | Select-Object -ExpandProperty Name) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-							#endregion
-						}
-
-						if ($CECloud.VolumeEncryptionKeys.Length -gt 0)
-						{
-							#region KMS
-
-							[System.Collections.ArrayList]$KMSSet = @()
-							$KMSSet += $CECloud.VolumeEncryptionKeys | Where-Object {$_.KeyId -ne $null } | Select-Object -ExpandProperty KeyId
-							$KMSSet += "Default"
-							$KMSSet += [System.String]::Empty
-
-							New-DynamicParameter -Name "VolumeEncryptionKey" -Type ([System.String[]]) -ParameterSets @("IndividualAWS") -ValidateSet $KMSSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-							#endregion
-						}
-
-						$Type = Import-UnboundParameterCode -PassThru
-						# The subnet Id here is the verbose version of the subnet selected by the user
-						[System.String]$Subnet = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "SubnetId", -1))
-			
-						# Select either the provided subnet or the existing one to see if we need to process
-						# the security groups
-						[System.String]$SubnetId = [System.String]::Empty
-
-						if (-not [System.String]::IsNullOrEmpty($Subnet))
-						{
-							if ($SubnetMapping.ContainsKey($Subnet))
-							{
-								$SubnetId = $SubnetMapping.$Subnet
-							}
-						}
-						else
-						{
-							[System.Collections.Hashtable]$ExistingConfig = Get-CEReplicationConfiguration -Id $Id | ConvertTo-Hashtable
-
-							if (-not [System.String]::IsNullOrEmpty($ExistingConfig.SubnetId))
-							{
-								$SubnetId = $ExistingConfig.SubnetId
-							}
-						}
-
-						# If the selected subnet was "Default", then it won't be in the mapping, and then we won't populate
-						# security groups since the only option is create new
-
-						if (-not [System.String]::IsNullOrEmpty($SubnetId))
-						{
-							# Set the network Id based on the selected subnet so we can get the right security groups as options
-							$private:NetworkId = $VpcMapping[$SubnetId]
-
-							#region SecurityGroups
-							[System.Collections.ArrayList]$SGSet = @($CECloud.SecurityGroups | Where-Object {$_.NetworkId -eq $private:NetworkId} | Select-Object -ExpandProperty SecurityGroupId)
-							$SGSet += [System.String]::Empty
-
-							New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-							#endregion
-						}
-
-						break
-					}
-					default {
-						throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
-					}
-				}
-			}
-
-			return $RuntimeParameterDictionary
-		}
-	}
-
-	Begin {
-	}
-
-	Process {
-		$SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.Collections.Hashtable]$ExistingConfig = Get-CEReplicationConfiguration -Id $Id | ConvertTo-Hashtable
-
-			# If a config hashtable wasn't provided, build one for the parameter set being used
-			if ($PSCmdlet.ParameterSetName -ne "Config")
-			{
-				# Convert the parameters specified into a hashtable
-
-                $Params = @{}
-
-				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator())
-                {
-                    $Params.Add($Item.Key, ($Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key))
-                }
-                
-                $Config = @{}
-
-                $RuntimeParameterDictionary.GetEnumerator() | ForEach-Object {
-                     [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
-                     if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
-                     {
-                        $ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
-                        $Params.Add($Param.Name, $ParameterSets)
-                     }
-                }
-
-				# Get the parameters for the command
-				foreach ($Item in $Params.GetEnumerator())
-				{
-					# If the parameter is part of the Individual parameter set
-					if ($Item.Value.Contains($PSCmdlet.ParameterSetName))
-					{
-						# Check to see if it was supplied by the user
-						if ($PSBoundParameters.ContainsKey($Item.Key))
-						{
-							# If it was, add it to the config object
-
-							if ($Item.Key -ieq "ReplicationTags")
-							{
-								$Tags = @()
-								# We need to convert the hashtable to the tag key/value structure
-								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
-								}
-
-								$Config.Add($Item.Key, $Tags)
-							}
-							elseif ($Item.Key -ieq "SubnetId") {
-								$Config.Add($Item.Key, $SubnetMapping[$PSBoundParameters[$Item.Key]])
-							}
-							else {
-								$Config.Add($Item.Key, $PSBoundParameters[$Item.Key])
-							}
-						}
-					}
-				}
-			}
-
-			# Merge the original and new blueprint
-			[System.Collections.Hashtable]$NewConfig = Merge-HashTables -Source $ExistingConfig -Update $Config
-
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations/$($Id.ToString())"
-
-			$ConfirmMessage = "Are you sure you want to update the replication configuration?"
-
-			$WhatIfDescription = "Updated configuration to $(ConvertTo-Json -InputObject $NewConfig)"
-			$ConfirmCaption = "Update Replication Configuration"
-
-			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-			{
-				Write-Verbose -Message "Sending updated config $(ConvertTo-Json -InputObject $NewConfig)"
-				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Patch -Body (ConvertTo-Json -InputObject $NewConfig) -ContentType "application/json" -WebSession $SessionInfo.Session
-	
-				if ($PassThru) 
-				{
-					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
-				}
-			}
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-	}
-
-	End {
-	}
-}
-
-Function New-CEReplicationConfiguration {
-	<#
-		.SYNOPSIS
-			Creates a new CE replication configuration.
-
-		.DESCRIPTION
-			This cmdlet is used to create a new CE replication configuration for a specific CE account.
-
-		.PARAMETER ProxyUrl
-			The url of the source proxy to use for outbound connectivity. Specify a URL and port like https://myproxy.contoso.com:8443. Leave blank to not use a proxy.
-
-		.PARAMETER SubnetId
-			Specify the subnet Id that the replication servers will be launched in.
-
-		.PARAMETER UsePrivateIp
-			Set this parameter to true to use a VPN, DirectConnect, ExpressRoute, or GCP Carrier Interconnect/Direct Peering.
-
-		.PARAMETER VolumeEncryptionKey
-			Specify the KMS key to use to encrypt the EBS volumes being written to by the replication instances.
-
-		.PARAMETER ReplicationTags
-			Specify the tags that will be applied to CE replication resources.
-
-		.PARAMETER Config
-			You can provide a replication config with these properties:
-
-			{
-				"proxyUrl": "", 
-				"replicationTags": [
-					{"key": "keyName", "value": "keyValue"}
-				], 
-				"region" : "114b110d-00ad-48d4-a930-90cb3f8cde2e",
-				"replicatorSecurityGroupIDs": [
-					"sg-b4c724c4"
-				], 
-				"subnetId": "subnet-421d476c", 
-				"usePrivateIp": false, 
-				"volumeEncryptionKey": ""
-			}
-
-            You cannot specify an updated Source as part of the config file, you must specify that separately.
-
-		.PARAMETER Source
-			The source identifier for replication. 
-
-		.PARAMETER Destination
-			The destination indentifier for replication.			
-
-		.PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-
-		.PARAMETER PassThru
-			Specify to return the updated config to the pipeline.
-
-		.EXAMPLE
-			New-CEReplicationConfiguration -SubnetId "subnet-421d476c" -Target "us-east-1" -Source "Generic"
-
-			Creates a new CE replication configuration to specify that replication will be sent to AWS US-East-1, replication servers should be deployed in subnet-421d476c, and the source is a generic location.
-
-		.INPUTS
-            None
-
-        .OUTPUTS
-           None or System.Management.Automation.PSCustomObject
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/22/2017
-    #>
-    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
-	[OutputType([PSCustomObject])]
-    Param(
-		[Parameter(ParameterSetName = "Config", Mandatory = $true)]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable]$Config = @{},
-
-        [Parameter(ParameterSetName = "IndividualAWS")]
-        [ValidateNotNull()]
-        [System.String]$ProxyUrl,
-
-        [Parameter(ParameterSetName = "IndividualAWS")]
-        [System.Boolean]$UsePrivateIp = $false,
-
-        [Parameter(ParameterSetName = "IndividualAWS")]
-        [System.String]$VolumeEncryptionKey,
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[System.Collections.Hashtable]$ReplicationTags,
-
-		[Parameter()]
-		[Switch]$PassThru,
-
-		[Parameter()]
-		[Switch]$Force,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-	DynamicParam {
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-			$DynSessionInfo = $script:Sessions.Get_Item($Session)
-			$DynSession = $Session
-		}
-		else {
-			$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$DynSession = $DynSessionInfo.User.Username
-		}
-
-		[System.Collections.Hashtable]$RegionMapping = @{"Generic" = "f54420d5-3de4-40bb-b35b-33d32ad8c8ef"}
-
-		[PSCustomObject[]]$CERegions = Get-CECloudRegion -Session $DynSession 
-
-		$CERegions | ForEach-Object {
-			$RegionMapping.Add($_.Name, $_.Id)
-		}
-
-        # Create the dictionary 
-		$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
-
-		#region Source - The source isn't defined as part of the replication config
-
-		New-DynamicParameter -Name "Source" -Type ([System.String]) -ValidateSet @($RegionMapping.GetEnumerator() | Select-Object -ExpandProperty Key) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-		#endregion
-		
-		if ($Config -eq $null -or $Config -eq @{})
-		{
-			$SubnetMapping = @{}
-			$VpcMapping = @{}
-
-			#region Target
-
-			[System.Collections.ArrayList]$TargetSet = $RegionMapping.GetEnumerator() | Select-Object -ExpandProperty Key
-			$TargetSet.Remove("Generic")
-
-			New-DynamicParameter -Name "Target" -Type ([System.String]) -ValidateSet $TargetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-			#endregion
-
-			# Import the unbound parameter checking code from HostUtilities
-			$Type = Import-UnboundParameterCode -PassThru
-			[System.String]$TargetRegionName = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "Target", -1))
-
-			if (-not [System.String]::IsNullOrEmpty($TargetRegionName))
-			{
-				if ($RegionMapping.ContainsKey($TargetRegionName))
-				{
-					$TargetRegionId = $RegionMapping[$TargetRegionName]
-
-					#region SubnetId
-
-					$CERegions | Where-Object {$_.Id -eq $TargetRegionId } | 
-						Select-Object -First 1 -ExpandProperty Subnets | 
-						# This will filter out the "Default" subnet as it doesn't have an subnetId or networkId property
-						Where-Object { -not [System.String]::IsNullOrEmpty($_.Name) -and -not [System.String]::IsNullOrEmpty($_.SubnetId) -and -not [System.String]::IsNullOrEmpty($_.NetworkId) } | 
-						ForEach-Object {
-							$SubnetMapping.Add($_.Name, $_.SubnetId)
-							$VpcMapping.Add($_.SubnetId, $_.NetworkId)
-						}
-
-					New-DynamicParameter -Name "SubnetId" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet ($CERegions | Where-Object {$_.Id -eq $TargetRegionId } | Select-Object -First 1 -ExpandProperty Subnets | Select-Object -ExpandProperty Name) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-					#endregion
-
-					[System.String]$SubnetId = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "SubnetId", -1))
-
-					if (-not [System.String]::IsNullOrEmpty($SubnetId))
-					{
-                        $Subnet = $SubnetMapping[$SubnetId]
-
-						if (-not [System.String]::IsNullOrEmpty($Subnet) -and $VpcMapping.ContainsKey($Subnet))
-						{
-							# $VpcId = $CERegions | Where-Object {$_.Id -eq $TargetRegionId} | Select-Object -First 1 | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.Name -eq $PSBoundParameters["SubnetId"]} | Select-Object -First 1 -ExpandProperty NetworkId
-							$VpcId = $VpcMapping[$Subnet]
-
-							#region SecurityGroups
-
-							$SGSet = $CERegions | Where-Object {$_.Id -eq $TargetRegionId} | Select-Object -First 1 | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.NetworkId -eq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
-							$SGSet += [System.String]::Empty
-
-							New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-							#endregion
-						}
-					}
-				}
-			}
-		}
-        
-        return $RuntimeParameterDictionary
-	}
-
-	Begin {
-	}
-
-	Process {
-		# Get all of the dynamic params into variables
-		[System.String]$Target = $PSBoundParameters["Target"]
-		[System.String]$Source = $PSBoundParameters["Source"]
-		[System.String]$SubnetId = $PSBoundParameters["SubnetId"]
-		[System.String]$SecurityGroupIds = $PSBoundParameters["ReplicatorSecurityGroupIDs"]
-
-		# Make sure a target or destination was specified
-		if ([System.String]::IsNullOrEmpty($Source) -and [System.String]::IsNullOrEmpty($Target) -and [System.String]::IsNullOrEmpty($Config["region"]))
-		{
-			throw "A new source and/or target must be specified to create a new replication configuration."
-		}
-
-		$SessionInfo = $null
-
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-			$SessionInfo = $script:Sessions.Get_Item($Session)
-		}
-		else {
-			$SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-		}
-
-		if ($SessionInfo -ne $null) 
-		{
-			# This is the default set of properties we can specify for a new replication config
-			$DefaultConfig = @{
-				"cloudCredentials" = "$($SessionInfo.CloudCredentials)";
-                "region" = "";
-                "subnetId" = "";
-                "replicatorSecurityGroupIDs" = @();
-                "volumeEncryptionKey" = "";
-                "replicationTags" = @();
-                "usePrivateIp" = $false;
-                "proxyUrl" = ""
-            }
-                    
-			# If a config hashtable wasn't provided, build one for the parameter set being used
-			if ($PSCmdlet.ParameterSetName -ne "Config")
-			{
-				# Convert the parameters specified into a hashtable
-				$Params = @{}
-
-				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator())
-                {
-                    $Params.Add($Item.Key, ($Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key))
-                }
-
-                $Config = @{}
-
-                $RuntimeParameterDictionary.GetEnumerator() | ForEach-Object {
-                     [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
-
-                     if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
-                     {
-                        $ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
-                        $Params.Add($Param.Name, $ParameterSets)
-                     }
-                }
-
-				# Get the parameters for the command
-				foreach ($Item in $Params.GetEnumerator())
-                {
-					# If the parameter is part of the Individual parameter set
-					if ($Item.Value.Contains($PSCmdlet.ParameterSetName))
-					{
-						# Check to see if it was supplied by the user
-						if ($PSBoundParameters.ContainsKey($Item.Key))
-						{
-							# If it was, add it to the config
-							
-							if ($Item.Key -eq "ReplicationTags")
-							{
-								$Tags = @()
-								# We need to convert the hashtable to the tag key/value structure
-								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
-								}
-
-								$Config.Add($Item.Key, $Tags)
-							}
-                            # The friendly name of the subnet was provided at the command line
-                            elseif($Item.Key -eq "SubnetId") {
-								$Config.Add($Item.Key, $SubnetMapping[$PSBoundParameters[$Item.Key]])
-                            }
-							else {
-								$Config.Add($Item.Key, $PSBoundParameters[$Item.Key])
-							}
-						}
-					}
-				}
-			}
-
-			# Merge the updated parameters specified with the default settings
-			# This ensures our request has all required properties, even if some are blank
-            $Config = Merge-Hashtables -Source $DefaultConfig -Update $Config
-
-			# We need the project to see the original source
-            [System.Collections.Hashtable]$CurrentProject = Get-CEProject -Session $Session | ConvertTo-Hashtable
-
-			# We need the current replication config to see the original target
-            [System.collections.Hashtable]$CurrentConfig = Get-CEReplicationConfiguration -Id $CurrentProject["replicationConfiguration"] -Session $Session | ConvertTo-Hashtable
-
-			# Build the confirmation messages with warnings about updates to source and destination
-            $ConfirmMessage = "The action you are about to perform is destructive!"
-
-            if (-not [System.String]::ISNullOrEmpty($Source))
-            {        
-				$OriginalSrc = $CurrentProject["source"]
-                $OriginalSource = $RegionMapping.GetEnumerator() | Where-Object {$_.Value -eq $OriginalSrc } | Select-Object -First 1 -ExpandProperty Key
-                    
-                # Do this second so we don't overwrite the original source for the confirm message
-				# This will set the updated source for the PATCH request
-                $CurrentProject["source"] = $RegionMapping[$Source]
-
-                $ConfirmMessage += "`r`n`r`nChanging your Live Migration Source from $OriginalSource to $Source will cause all current instances to be disconnected from CloudEndure: you will need to reinstall the CloudEndure Agent on all the instances and data replication will restart from zero."
-            }
-
-            if (-not [System.String]::IsNullOrEmpty($Target) -or -not [System.String]::IsNullOrEmpty($Config["region"]))
-            {
-				# If a config with a region wasn't specified, get it from the Target specified
-				# The RegionMapping table was built during the dynamic params evaluation
-				if ([System.String]::IsNullOrEmpty($Config["region"]))
-				{
-					$Config["region"] = $RegionMapping[$Target]
-				}
-                $OriginalTarget = $RegionMapping.GetEnumerator() | Where-Object {$_.Value -eq $CurrentConfig["region"] } | Select-Object -First 1 -ExpandProperty Key
-
-                $ConfirmMessage += "`r`n`r`nChanging your Live Migration Target from $OriginalTarget to $Target will cause all current instances to be disconnected from CloudEndure: you will need to reinstall the CloudEndure Agent on all the instances and data replication will restart from zero."
-            }
-
-            $ConfirmMessage += "`r`n`r`nAre you sure you want to continue?"
-			$WhatIfDescription = "New replication configuration created: $(ConvertTo-Json -InputObject $Config)"
-			$ConfirmCaption = "Create New Replication Configuration"
-
-			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-			{
-                # Send the post request to create a new replication configuration if a new target region was specified
-                if (-not [System.String]::IsNullOrEmpty($Config["region"]))
-                {
-					if ($Config["region"] -ne $Currentconfig["region"] )
-					{
-						Write-Verbose -Message "Sending config $(ConvertTo-Json $Config)"
-						[System.String]$PostUri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations"
-						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$PostResult = Invoke-WebRequest -Uri $PostUri -Method Post -Body (ConvertTo-Json -InputObject $Config) -ContentType "application/json" -WebSession $SessionInfo.Session
-
-						if ($PostResult.StatusCode -ne 201)
-						{
-							# Make sure we don't send the patch request if this failed
-							throw "Failed to create new Replication Configuration with error: $($PostResult.StatusCode) $($PostResult.StatusDescription) - $($PostResult.Content)"
-						}
-						else
-						{
-							Write-Verbose -Message $PostResult.Content
-							# Update the project with the new replication configuration Id to supply in the PATCH request
-							$CurrentProject["replicationConfiguration"] = (ConvertFrom-Json -InputObject $PostResult.Content).Id
-						}
-					}
-					else
-					{
-						Write-Warning -Message "The specified target region $OriginalTarget is the same as the current region, no update made."
-					}
-                }
-
-				# Make sure a new source that was different than the old one was specified or that the target region is new
-				if ((-not [System.String]::IsNullOrEmpty($Source) -and $CurrentProject["source"] -ne $OriginalSrc) -or $Config["region"] -ne $Currentconfig["region"])
-				{
-					# Send the patch request to update the project data with the new source, if provided, or the new replication configuration
-					# At least 1 of them changed, so we'll always need to send this patch request
-					[System.String]$PatchUri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)"
-
-					# Don't specify the type of project in the update, it's fixed based on the type of account CE sets up
-					$CurrentProject.Remove("type")
-
-					Write-Verbose -Message "Sending updated project $(ConvertTo-Json $CurrentProject)"
-					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$PatchResult = Invoke-WebRequest -Uri $PatchUri -Method Patch -Body (ConvertTo-Json -InputObject $CurrentProject) -ContentType "application/json" -WebSession $SessionInfo.Session
-
-					if ($PatchResult.StatusCode -ne 200)
-					{
-						throw "The project information patch request failed, you will need to retry updating this item if you selected a different target environment as the project and replication configurations are now out of sync."
-					}
-					else 
-					{
-						Write-Verbose -Message $PatchResult.Content
-					}
-				}
-				else
-				{
-					Write-Warning -Message "Either no new source specified or no new target specified."
-				}
-            }
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-	}
-
-	End {
-	}
-}
-
-Function Remove-CEReplicationConfiguration {
-	<#
-		.SYNOPSIS
-			Removes a replication configuration. NOT YET SUPPORTED!
-
-		.DESCRIPTION
-			This cmdlet removes a specified replication configuration. NOT YET SUPPORTED!
-
-		.PARAMETER Id
-			The id of the replication configuration to remove.
-
-		.PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-
-		.PARAMETER PassThru
-			If specified, the deleted configuration is returned to the pipeline.
-
-		.EXAMPLE
-			Remove-CEReplicationConfiguration -Id 2ff58f32-cb82-4c41-accc-3001a104c560
-
-			Removes the replication configuration with the provided Id.
-
-		.INPUTS
-			System.Guid
-
-		.OUPUTS
-			None or System.Management.Automation.PSCustomObject
-
-		.NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/22/2017
-	#>
-    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
-	[OutputType([PSCustomObject])]
-    Param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
-        [System.Guid]$Id,
-
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty,
-
-		[Parameter()]
-		[Switch]$PassThru
-    )
-
-    Begin {
-		throw "Cmdlet not implemented."
-    }
-
-    Process {
-        $SessionInfo = $null
-
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-			$SessionInfo = $script:Sessions.Get_Item($Session)
-		}
-		else {
-			$SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-		}
-
-		if ($SessionInfo -ne $null) 
-		{
-            [System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/replicationConfigurations"
-            $Body = @{"id" = $Id.ToString()}
-
-			$ConfirmMessage = "You are about to remove replication configuration $Id."
-			$WhatIfDescription = "Removed replication configuration $Id"
-			$ConfirmCaption = "Delete CE Replication Configuration"
-			
-			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-			{
-				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Delete -Body (ConvertTo-Json -InputObject $Body) -WebSession $SessionInfo.Session
-				Write-Verbose $Result.StatusCode
-				Write-Verbose $Result.Content
-
-				if ($PassThru)
-				{
-					Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
-				}
-			}
-        }
-        else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
-Function Get-CEProject {
-	<#
-        .SYNOPSIS
-			Gets basic information about the CE project.
-
-        .DESCRIPTION
-			The cmdlet retrieves basic information about the CE project in the CE account.
-
-		.PARAMETER All
-			This specifies to retrieve all current projects, instead of the one identified during logon.
-
-        .PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-        .EXAMPLE
-            Get-CEProject -All
-
-            Retrieves all projects.
-
-		.EXAMPLE
-			Get-CEProject
-			
-			Retrieves data about the current project.
-
-        .INPUTS
-            None
-
-        .OUTPUTS
-           System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject], [PSCustomObject[]])]
-    Param(
-		[Parameter()]
-		[Switch]$All,
-
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects"
-			
-			if (-not $All)
-			{
-				$Uri += "/$($SessionInfo.ProjectId)"
-			}
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-        
-			if ($All)
-			{
-				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)				
-			}
-			else 
-			{
-				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
-			}
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
-Function Get-CEBlueprint {
-	<#
-        .SYNOPSIS
-			Gets blueprint information.
-
-        .DESCRIPTION
-			The cmdlet retrieves a specific blueprint or all the blueprints of the specified account if no Id is provided.
-
-		.PARAMETER Id
-			The blueprint Id to retrieve. If this parameter is not specified, all blueprints for the account are returned.
-
-        .PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-        .EXAMPLE
-            Get-CEBlueprint
-
-            Retrieves the blueprints of the current account.
-
-		.EXAMPLE 
-			Get-CEBlueprint -Id 184142f8-a581-4c86-9285-e24382d60d55
-
-			Gets the blueprint matching the provided Id.
-
-        .INPUTS
-            None or System.Guid
-
-        .OUTPUTS
-           System.Management.Automation.PSCustomObject[] or System.Management.Automation.PSCustomObject
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject], [PSCustomObject[]])]
-    Param(
-		[Parameter(ValueFromPipeline = $true)]
-		[System.Guid]$Id = [System.Guid]::Empty,
-
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/blueprints"
-
-			if ($Id -ne [System.Guid]::Empty)
-			{
-				$Uri += "/$($Id.ToString())"
-			}
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-        
-			if ($Id -ne [System.Guid]::Empty)
-			{
-				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
-			}
-			else 
-			{
-				Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
-			}
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
-Function Set-CEBlueprint {
-	<#
-        .SYNOPSIS
-			Sets a blueprint for a CE Instance.
-
-        .DESCRIPTION
-			The cmdlet updates the blueprint for a specific CE Instance. Set a parameter to an empty string to clear it from the blueprint.
-
-			Currently, this cmdlet only supports AWS target cloud environments.
-
-		.PARAMETER Blueprint
-			The updated blueprint data to send. This hashtable only needs to contain the data that you want to update. The original blueprint will be merged with this one.
-
-			The available configuration items are:
-
-			{
-				"disks":[
-					{"name":"c:0","type":"SSD","iops":1000}
-				],
-				"iamRole":"",
-				"instanceType":"c4.large",
-				"placementGroup":"",
-				"privateIPAction":"COPY_ORIGIN",		# CREATE_NEW or CUSTOM_IP
-				"privateIPs":[],
-				"publicIPAction":"ALLOCATE",			# DONT_ALLOCATE or AS_SUBNET
-				"runAfterLaunch":true,
-				"securityGroupIDs":[
-					"sg-027c637e"
-				],
-				"staticIp":"",							# Only set if staticIpAction is EXISTING
-				"staticIpAction":"DONT_CREATE",			# CREATE_NEW or EXISTING
-				"subnetIDs":[
-						"subnet-843598b8"
-				],
-				"tags":[
-					{	
-						"key":"test",
-						"value":"testing"
-					}
-				]
-			}
-
-		.PARAMETER IAMRole
-			The AWS IAM Role to associate with this blueprint.
-
-		.PARAMETER InstanceType
-			The instance type to launch the replica as.
-
-		.PARAMETER PlacementGroup
-			The placement group to launch the instance in.
-
-		.PARAMETER PrivateIPAction
-			The action for the instance's private IP address.
-
-		.PARAMETER PrivateIPs
-			If you select CUSTOM for PrivateIPAction, specify the private IPs you want associated with the instance.
-
-		.PARAMETER PublicIPAction
-			The action for the instance's ephemeral public IP address.
-
-		.PARAMETER RunAfterLaunch
-			Specify true to have the instance started after it is launched or false to leave it in a stopped state.
-
-		.PARAMETER SecurityGroupIds
-			The security groups that will be associated with the instance.
-
-		.PARAMETER StaticIP
-			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
-
-		.PARAMETER SubnetIDs
-			Specify the subnet Id(s) the instance will be associated with.
-
-		.PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-		.PARAMETER Tags
-			The tags that will be associated with the instance.
-
-		.PARAMETER InstanceId
-			The id of the CE instance whose blueprint you want to update.
-
-		.PARAMETER PassThru
-			The updated blueprint will be returned to the pipeline.
-
-        .EXAMPLE
-            Set-CEBlueprint -InstanceId 47d842b8-ebfa-4695-90f8-fb9ab686c708 -Blueprint @{"IAMRole" = "EC2-InstanceProfile-Public"}
-
-			This adds or updates the IAMRole property for the blueprint to "EC2-InstanceProfile-Public" for the CE instance identified by 47d842b8-ebfa-4695-90f8-fb9ab686c708.
-
-		.EXAMPLE
-			Set-CEBlueprint -InstanceId 47d842b8-ebfa-4695-90f8-fb9ab686c708 -IAMRole "EC2-InstanceProfile-Public"
-
-			This adds or updates the IAMRole property for the blueprint to "EC2-InstanceProfile-Public" for the CE instance identified by 47d842b8-ebfa-4695-90f8-fb9ab686c708.
-
-        .INPUTS
-            None
-
-        .OUTPUTS
-           None or System.Management.Automation.PSCustomObject
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
-    #>
-    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
-    [OutputType([PSCustomObject])]
-    Param(
-		[Parameter(Mandatory = $true)]
-        [System.Guid]$InstanceId = [System.Guid]::Empty,
-
-		[Parameter(Mandatory = $true, ParameterSetName = "Blueprint")]
-		[System.Collections.Hashtable]$Blueprint = @{},
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[ValidateSet("COPY_ORIGIN", "CREATE_NEW", "CUSTOM_IP")]
-		[System.String]$PrivateIPAction,
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBNET")]
-		[System.String]$PublicIPAction,
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[System.Boolean]$RunAfterLaunch,
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[ValidateSet("DONT_CREATE", "CREATE_NEW", "EXISTING")]
-		[System.String]$StaticIPAction,
-
-		[Parameter(ParameterSetName = "IndividualAWS")]
-		[System.Collections.Hashtable]$Tags,
-
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty,
-
-		[Parameter()]
-		[Switch]$PassThru
-    )
-
-	DynamicParam {
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $DynSessionInfo = $script:Sessions.Get_Item($Session)
-			$DynSession = $Session
-        }
-        else {
-            $DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-            $DynSession = $DynSessionInfo.User.Username
-        }
-
-		[System.Collections.Hashtable]$CECloud = Get-CETargetCloud -Session $DynSession | ConvertTo-Hashtable
-
-		# Create the dictionary 
-        [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
-		
-		if ($InstanceId -ne $null -and $InstanceId -ne [System.Guid]::Empty) 
-		{
-			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Session $DynSession -Id $InstanceId | ConvertTo-Hashtable
-
-			switch ($CECloud.Cloud)
-			{
-				"AWS" {
-					$SubnetMapping = @{}
-			
-					$CECloud.Subnets | ForEach-Object {
-						if ($_.Name -ne "Default") {
-							$SubnetMapping.Add($_.SubnetId, $_.NetworkId)
-						}
-					}
-
-					$private:NetworkId = ""
-
-					#region IAMRole
-
-					$IAMSet = $CECloud.IAMRoles
-					$IAMSet += [System.String]::Empty
-
-					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $IAMSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-        
-					#endregion
-
-					#region InstanceType
-
-					New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $CECloud.InstanceTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-					#endregion
-
-					if ($CECloud.PlacementGroups.Length -gt 0)
-					{
-						#region PlacementGroup
-
-						$PlacementSet = $CECloud.PlacementGroups
-						$PlacementSet += [System.String]::Empty
-
-						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $PlacementSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-        
-						#endregion
-					}
-		
-					if ($CECloud.Subnets.Length -gt 0) 
-					{
-						#region SubnetIDs
-
-						$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
-						$SubnetSet += "Default"
-
-						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-						#endregion
-					}
-
-					if ($CECloud.VolumeEncryptionKeys.Length -gt 0)
-					{
-						#region KMS
-
-						$KMSSet = $CECloud.VolumeEncryptionKeys | Where-Object {$_.KeyId -ne $null } | Select-Object -ExpandProperty KeyId
-						$KMSSet += "Default"
-						$KMSSet += [System.String]::Empty
-
-						New-DynamicParameter -Name "VolumeEncryptionKey" -Type ([System.String]) -ParameterSets @("IndividualAWS") -ValidateSet $KMSSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-						#endregion
-					}
-			
-					if ($PrivateIPAction -eq "CUSTOM_IP" -or $ExistingBlueprint.PrivateIPAction -eq "CUSTOM_IP")
-					{
-						#region PrivateIPs
-
-						New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -Mandatory:($PrivateIPAction -eq "CUSTOM_IP") -ParameterSets @("IndividualAWS") -ValidateSet $KMSSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-						#endregion
-					}
-
-					if ($SubnetIDs.Length -gt 0 -or $ExistingBlueprint.SubnetIDs.Length -gt 0)
-					{
-						# Set the network Id based on the selected subnet so we can get the right security groups as options
-						if ($SubnetMapping.ContainsKey($SubnetIDs[0])) {
-							$private:NetworkId = $SubnetMapping[$SubnetIDs[0]]
-						}
-						elseif ($SubnetMapping.ContainsKey($ExistingBlueprint.SubnetIDs[0])) {
-							$private:NetworkId = $SubnetMapping[$ExistingBlueprint.SubnetIDs[0]]
-						}
-
-						#region SecurityGroups
-
-						$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -eq $private:NetworkId}
-						$SGSet += [System.String]::Empty
-
-						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("IndividualAWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-        
-						#endregion
-					}
-
-					if ($StaticIPAction -eq "EXISTING" -or $ExistingBlueprint.StaticIPAction -eq "EXISTING")
-					{
-						#region EIP
-
-						New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory:($StaticIPAction -eq "EXISTING") -ParameterSets @("IndividualAWS") -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-						#endregion
-					}
-
-					break
-				}
-				default {
-					throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
-				}
-			}
-		}
-
-		return $RuntimeParameterDictionary
-	}
-
-    Begin {      
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-            $Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Session $Session -Id $InstanceId | ConvertTo-Hashtable
-
-			# If a blueprint hashtable wasn't provided, build one for the parameter set being used
-			if ($PSCmdlet.ParameterSetName -ne "Blueprint")
-			{
-				# Convert the parameters specified into a hashtable
-
-				$CommandName = $PSCmdlet.MyInvocation.InvocationName
-
-				[System.Collections.Hashtable]$ParamList = (Get-Command -Name  $CommandName).Parameters
-
-				$Blueprint = @{}
-
-				# Get the parameters for the command
-				foreach ($Item in $ParamList.GetEnumerator())
-				{
-					# If the parameter is part of the Individual parameter set
-					if ($Item.Value.ParameterSets.ContainsKey($PSCmdlet.ParameterSetName))
-					{
-						# Check to see if it was supplied by the user
-						if ($PSBoundParameters.ContainsKey($Item.Key))
-						{
-							# If it was, add it to the blueprint object
-
-							if ($Item.Key -eq "Tags")
-							{
-								$Tags = @()
-								# We need to convert the hashtable to the tag key/value structure
-								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
-								}
-
-								$Blueprint.Add($Item.Key, $Tags)
-							}
-							else {
-								$Blueprint.Add($Item.Key, $PSBoundParameters[$Item.Key])
-							}
-						}
-					}
-				}
-			}
-
-			# Merge the original and new blueprint
-			[System.Collections.Hashtable]$NewBluePrint = Merge-HashTables -Source $ExistingBlueprint -Update $Blueprint
-
-            if ($NewBluePrint.StaticIPAction -ne "EXISTING") {
-                $NewBluePrint.StaticIP = ""
-            }
-
-            if ($NewBluePrint.PrivateIPAction -ne "CUSTOM_IP") {
-                $NewBluePrint.PrivateIPs = @()
-            }
-
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$($SessionInfo.ProjectId)/blueprints/$($NewBluePrint.Id)"
-
-			$ConfirmMessage = "Are you sure you want to update the blueprint configuration?"
-
-			$WhatIfDescription = "Updated blueprint to $(ConvertTo-Json -InputObject $NewBluePrint)"
-			$ConfirmCaption = "Update Blueprint"
-
-			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-			{
-				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Body (ConvertTo-Json -InputObject $NewBluePrint) -ContentType "application/json" -Method Patch -WebSession $SessionInfo.Session
-        
-				if ($PassThru)
-				{
-					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
-				}
-			}
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
 
 Function New-CEInstallationToken {
 	<#
@@ -2577,105 +4109,6 @@ Function Get-CEInstallationToken {
 			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
 
 			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content).AgentInstallationToken
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
-Function Set-CEEmailNotifications {
-	<#
-        .SYNOPSIS
-			Sets the email notification status.
-
-        .DESCRIPTION
-			The cmdlet either disables or enables email notifications.
-
-		.PARAMETER Enabled
-			Specifies that email notifications are enabled.
-
-		.PARAMETER Disabled
-			Specifies that email notifications are disabled.
-
-        .PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-        .EXAMPLE
-            Get-CEBlueprints
-
-            Retrieves the blueprints of the current account.
-
-        .INPUTS
-            None
-
-        .OUTPUTS
-           None
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/17/2017
-    #>
-    [CmdletBinding()]
-    [OutputType()]
-    Param(
-		[Parameter(Mandatory = $true, ParameterSetName = "Enabled")]
-		[Switch]$Enabled,
-
-		[Parameter(Mandatory = $true, ParameterSetName = "Disabled")]
-		[Switch]$Disabled,
-
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/users/$($SessionInfo.User.Id)"
-
-			[System.String[]]$Ids = @()
-
-			if ($Enabled) {
-				$Ids += $SessionInfo.ProjectId
-			}
-
-			[System.String]$Body = ConvertTo-Json -InputObject @{"id" = $SessionInfo.User.Id; "settings" = @{"sendNotifications" = @{"projectIds" = $Ids}}} -Depth 3
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Patch -ContentType "application/json" -Body $Body -WebSession $SessionInfo.Session
-
-			if ($Result.StatusCode -eq 200) {
-				if ($Enabled) {
-					Write-Verbose -Message "Email notifications enabled for $($SessionInfo.User.Username)."
-				}
-				else {
-					Write-Verbose -Message "Email notifications disabled for $($SessionInfo.User.Username)."
-				}
-			}
-			else {
-				Write-Warning -Message "Email notifications could not be set properly, $($Result.StatusCode) - $($Result.StatusDescription) : $($Result.Content)"
-			}
 		}
 		else 
 		{
@@ -3339,114 +4772,6 @@ Function Set-CECloudCredential {
 	}
 }
 
-Function Set-CEConsolePassword {
-	<#
-		.SYNOPSIS
-			Updates the password associated with the console logon.
-
-		.DESCRIPTION
-			The cmdlet updates the CE account password used to logon to the console.
-
-		.PARAMETER OldPassword
-			The current password for the account.
-
-		.PARAMETER NewPassword
-			The new password for the account. It must 8 characters or more, 1 upper, 1 lower, 1 numeric, and 1 special character.
-
-		.PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-
-		.EXAMPLE
-			Set-CEConsolePassword -OldPassword MyOldP@$$w0rd -NewPassword @$3cureP@$$w0rd
-			
-			The cmdlet updates the password.
-
-		.INPUTS
-			PSObject
-
-		.OUTPUTS
-			None
-
-		.NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/24/2017
-	#>
-	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
-	[OutputType()]
-	Param(
-		[Parameter(Mandatory = $true, Position = 0, ValueFromPipelineByPropertyName = $true)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$OldPassword,
-
-		[Parameter(Mandatory = $true, Position = 1, ValueFromPipelineByPropertyName = $true)]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$_ -ne $OldPassword
-		})]
-		[ValidatePattern("^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[$@$!%*?&])[A-Za-z\d$@$!%*?&]{8,}")]
-		[System.String]$NewPassword,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-	)
-
-	Begin {
-	}
-
-	Process {
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-            $Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/changePassword"
-
-			$Body = @{
-				"oldPassword" = $OldPassword;
-				"newPassword" = $NewPassword
-			}
-
-			$ConfirmMessage = "Are you sure you want to update the console password?"
-			$WhatIfDescription = "Updated password for $Session."
-			$ConfirmCaption = "Update Console Password for $Session"
-
-			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-			{
-				Write-Verbose -Message "Sending updated config:`r`n $(ConvertTo-Json -InputObject $Body)"
-				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Post -Body (ConvertTo-Json -InputObject $Body) -ContentType "application/json" -WebSession $SessionInfo.Session
-
-				if ($Result.StatusCode -eq 204)
-				{
-					Write-Verbose -Message "Password successfully updated."
-					if ($PassThru)
-					{
-						Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content))
-					}
-				}
-				else
-				{
-					Write-Warning -Message "There was an issue with changing the password: $($Result.StatusCode) $($Result.StatusDescription) - $($Result.Content)"
-				}
-			}
-		}
-		else {
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-	}
-
-	End {
-	}
-}
-
 Function Invoke-CEMachineTest {
 	<#
 		.SYNOPSIS
@@ -3661,153 +4986,4 @@ Any previously launched versions of these instances (including any associated cl
 
 	End {
 	}
-}
-
-Function Get-CEUser {
-	<#
-        .SYNOPSIS
-			Gets the current CloudEndure user information.
-
-        .DESCRIPTION
-			The cmdlet gets the current CloudEndure user information
-
-        .PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-            
-        .EXAMPLE
-            Get-CEUser
-
-            Gets the current user information.
-
-        .INPUTS
-            None
-
-        .OUTPUTS
-           PSCustomObject
-
-        .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/24/2017
-    #>
-    [CmdletBinding()]
-    [OutputType([System.String])]
-    Param(
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/me"
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-
-			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
-}
-
-Function Get-CEAccountSummary {
-	<#
-		.SYNOPSIS
-			Retrieves summary data about the CE account.
-
-		.DESCRIPTION
-			This cmdlet retrieves a lot of information about the CE account including:
-
-			-Account (Features & Id)
-			-CloudCredentials (Id)
-			-Clouds (Configured cloud environments)
-			-DateTime (Current time)
-			-License
-			-Project
-			-Regions (Source & Target)
-			-ReplicationConfiguration
-			-User
-
-			This was the data originally returned by the celogin API call.
-
-		.PARAMETER Session
-            The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
-
-		.EXAMPLE
-			Get-CEAccountSummary
-
-			Gets account summary data.
-
-		.INPUTS
-			None
-
-		.OUTPUTS
-			PSCustomObject
-
-		 .NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 8/24/2017
-
-	#>
-	 Param(
-        [Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[ValidateScript({
-			$script:Sessions.ContainsKey($_.ToLower())
-		})]
-        [System.String]$Session = [System.String]::Empty
-    )
-
-    Begin {        
-    }
-
-    Process {
-        $SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -ne $null) 
-		{
-			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/ceme"
-
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-
-			Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
-		}
-		else 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-    }
-
-    End {
-    }
 }
