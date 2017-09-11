@@ -26,7 +26,7 @@ The passthru returns the key value the session information is stored with, it is
 
 **Get license information.**
 
-    Get-CELicenses
+    Get-CELicense
 
 **Gets the current blueprints.**
 
@@ -51,6 +51,30 @@ The commands will get all of the blueprints in both accounts.**
     Remove-CESession
 
 ## Revision History
+
+### 1.1.0.0
+Updated module for 100% API coverage including all target cloud environments, AWS, Azure, GCP, and Generic. This includes several additional cmdlets:
+
+Get-CEMachineRecoveryPoints
+Get-CEAccount
+Set-CEProject
+New-CECloudCredential
+Get-CECloudCredential
+Get-CECloud
+Get-CESourceCloud
+Get-CEMachineReplica
+Invoke-CEMachineFailover
+Invoke-CEReplicaCleanup
+
+All of the List operations now support Offset and Limit parameters. You can also specify a non-default ProjectId or CloudCredential Id for each cmdlet that supports it.
+
+The New-CEReplicationConfiguration cmdlet allows for the input of the SubnetId by both the long name (as presented in the CE console with VPC info) and as the normal subnet id.
+
+This is really a BETA release, many of the cmdlets were refactored or updated with added validation or capabilities, but I may have typos or copy/paste errors I didn't catch through testing. 
+Please report any bugs or errors, it's just me working on it.
+
+** NOTE : Many of the CE APIs are case sensitive, you may receive an error response if one of the JSON keys in a POST, PATCH, or DELETE body is not capitalized correctly,
+		use the -Verbose option to view additional details about the request to see if this may be an issue. Send me the details if you think this is the case.
 
 ### 1.0.0.3
 Fixed typo in New-CEReplicationConfiguration.
