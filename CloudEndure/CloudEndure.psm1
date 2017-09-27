@@ -621,6 +621,8 @@ Function New-CEBlueprint {
 		.PARAMETER Blueprint
 			The blueprint to apply, the hashtable can be defined with the following data (this is presented in JSON, which the hashtable will be converted to):
 
+			If you specify a blueprint document, all other configuration parameters are ignored.
+
 			{
 			  "iamRole": "string",
 			  "staticIp": "string",
@@ -769,7 +771,7 @@ Function New-CEBlueprint {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 9/7/2017
+			LAST UPDATE: 9/26/2017
 			
 	#>
 	[CmdletBinding(DefaultParameterSetName="__AllParameterSets")]
@@ -827,107 +829,112 @@ Function New-CEBlueprint {
 	)
 
 	DynamicParam {
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $DynSessionInfo = $script:Sessions.Get_Item($Session)
-			$DynSession = $Session
-        }
-        else {
-            $DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-            $DynSession = $DynSessionInfo.User.Username
-        }
-
-		$DynSplat = @{
-			"Session" = $DynSession
-		}
-
-		if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
-		{
-			$DynSplat.Add("ProjectId", $ProjectId)
-		}
-
-		[System.Collections.Hashtable]$CECloud = Get-CETargetCloud @DynSplat | ConvertTo-Hashtable
 
 		# Create the dictionary 
         [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
-		
-		New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet ($CECloud.InstanceTypes) -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
-		switch ($CECloud.Cloud)
+		# Only generate the dynamic parameters if a blueprint doc wasn't specified
+		if (-not $PSBoundParameters.ContainsKey("Blueprint"))
 		{
-			"AWS" {
+			if (-not [System.String]::IsNullOrEmpty($Session)) {
+				$DynSessionInfo = $script:Sessions.Get_Item($Session)
+				$DynSession = $Session
+			}
+			else {
+				$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+				$DynSession = $DynSessionInfo.User.Username
+			}
 
-				if ($CECloud.IAMRoles.Length -gt 0)
-				{
-					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $CECloud.IAMRoles -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-				}
+			$DynSplat = @{
+				"Session" = $DynSession
+			}
 
-				if ($CECloud.PlacementGroups.Length -gt 0)
-				{
-					New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet ($CECloud.PlacementGroups) -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-				}
+			if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
+			{
+				$DynSplat.Add("ProjectId", $ProjectId)
+			}
 
-				if ($CECloud.Subnets.Length -gt 0)
-				{
-					$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
-					# Add default to allow user to specify the default subnet for the configured region
-					$SubnetSet += "Default"
+			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud @DynSplat | ConvertTo-Hashtable
 
-					New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ValidateSet $SubnetSet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-				}
+			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet ($CECloud.InstanceTypes) -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
-				$Type = Import-UnboundParameterCode -PassThru
-				$Subnets = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.Object]).Invoke($Type, @($PSCmdlet, "SubnetIDs", -1))
+			if ($PrivateIPAction -ieq "CUSTOM_IP")
+			{
+				New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -ValidateNotNullOrEmpty -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+			}
 
-				$Key = [System.String]::Empty
+			if ($StaticIPAction -ieq "EXISTING")
+			{
+				New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+			}
 
-				if ($Subnets -is [System.Array])
-				{
-					$Subnet = $Sunets[0]
-				}
-				elseif ($Subnets -is [System.String])
-				{
-					if (-not [System.String]::IsNullOrEmpty($Subnets))
+			switch ($CECloud.Cloud)
+			{
+				"AWS" {
+
+					if ($CECloud.IAMRoles.Length -gt 0)
 					{
-						$Key = $Subnets
+						New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $CECloud.IAMRoles -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 					}
+
+					if ($CECloud.PlacementGroups.Length -gt 0)
+					{
+						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet ($CECloud.PlacementGroups) -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+					}
+
+					if ($CECloud.Subnets.Length -gt 0)
+					{
+						$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
+						# Add default to allow user to specify the default subnet for the configured region
+						$SubnetSet += "Default"
+
+						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ValidateSet $SubnetSet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+					}
+
+					$Type = Import-UnboundParameterCode -PassThru
+					$Subnets = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.Object]).Invoke($Type, @($PSCmdlet, "SubnetIDs", -1))
+
+					$Key = [System.String]::Empty
+
+					if ($Subnets -is [System.Array])
+					{
+						$Key = $Subnets[0]
+					}
+					elseif ($Subnets -is [System.String])
+					{
+						if (-not [System.String]::IsNullOrEmpty($Subnets))
+						{
+							$Key = $Subnets
+						}
+					}
+
+					$Subnet = $CECloud.Subnets | Where-Object {$_.Name -ieq $Key -or $_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
+
+					# If the subnet is "Default", you won't be able to select a security group, so a new one will be created
+					# Make sure there are security groups in this region and that we found a matching one
+					if ($CECloud.SecurityGroups -ne $null -and $CECloud.SecurityGroups.Length -gt 0 -and $Subnet -ne $null)
+					{
+						# Get the network Id based on the selected subnet so we can get the right security groups as options
+						[System.String[]]$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -ieq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
+
+						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+					}
+
+					break
 				}
+				"GCP" {
 
-				$Subnet = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -ieq $Key -or $_.Id -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
-
-				# If the subnet is "Default", you won't be able to select a security group, so a new one will be created
-				# Make sure there are security groups in this region and that we found a matching one
-				if ($CECloud.SecurityGroups -ne $null -and $CECloud.SecurityGroups.Length -gt 0 -and $Subnet -ne $null)
-				{
-					# Get the network Id based on the selected subnet so we can get the right security groups as options
-					[System.String[]]$SGSet = $CECloud | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.NetworkId -ieq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
-
-					New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+					break
 				}
+				"Azure" {
 
-				break
+					break
+				}
+				default {
+					throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
+					break
+				}
 			}
-			"GCP" {
-
-				break
-			}
-			"Azure" {
-
-				break
-			}
-			default {
-				throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
-				break
-			}
-		}
-
-		if ($PrivateIPAction -ieq "CUSTOM_IP")
-		{
-			New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -ValidateNotNullOrEmpty -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-		}
-
-		if ($StaticIPAction -ieq "EXISTING")
-		{
-			New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 		}
 
 		return $RuntimeParameterDictionary
@@ -984,13 +991,13 @@ Function New-CEBlueprint {
 							# If it was, add it to the blueprint object
 							if ($Item.Key -ieq "Tags")
 							{
-								$Tags = @()
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
 								# We need to convert the hashtable to the tag key/value structure
 								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
 								}
 
-								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $Tags)
+								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $TagsToAdd)
 							}
 							else {
 								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $PSBoundParameters[$Item.Key])
@@ -1001,11 +1008,11 @@ Function New-CEBlueprint {
 			}
 
 			if ($BluePrint.StaticIPAction -ne "EXISTING") {
-                $BluePrint.StaticIP = ""
+                $BluePrint.staticIP = ""
             }
 
             if ($BluePrint.PrivateIPAction -ne "CUSTOM_IP") {
-                $BluePrint.PrivateIPs = @()
+                $BluePrint.privateIPs = @()
             }
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -1051,7 +1058,7 @@ Function Get-CEBlueprint {
 			The cmdlet retrieves a specific blueprint or all the blueprints of the specified account if no Id is provided.
 
 		.PARAMETER Id
-			The blueprint Id to retrieve. If this parameter is not specified, all blueprints for the account are returned.
+			The blueprint Id to retrieve. If this parameter is not specified, the blueprints are listed.
 
         .PARAMETER Session
             The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
@@ -1064,6 +1071,9 @@ Function Get-CEBlueprint {
 
 		.PARAMETER ProjectId
 			The project Id to use to retrieve the details. This defaults to the current project retrieved from the login.
+
+		.PARAMETER All
+			Gets all blueprints without paging the results.
             
         .EXAMPLE
             Get-CEBlueprint
@@ -1073,7 +1083,7 @@ Function Get-CEBlueprint {
 		.EXAMPLE
             Get-CEBlueprint -Offset 1501 -Limit 10
 
-            Retrieves the blueprints at index 1501 through 1511. This skips listing the first 1500 blueprints.
+            Retrieves the blueprints at index 1501 through 1511. This skips listing the first 1501 blueprints.
 
 		.EXAMPLE 
 			Get-CEBlueprint -Id 184142f8-a581-4c86-9285-e24382d60d55
@@ -1149,6 +1159,9 @@ Function Get-CEBlueprint {
 		[ValidateRange(0, 1500)]
 		[System.UInt32]$Limit = 1500,
 
+		[Parameter(ParameterSetName = "All")]
+		[Switch]$All,
+
 		[Parameter()]
 		[ValidateScript({
 			$_ -ne [System.Guid]::Empty
@@ -1186,6 +1199,8 @@ Function Get-CEBlueprint {
 
 			[System.String]$Uri = "$script:Url/$($SessionInfo.Version)/projects/$ProjectId/blueprints"
 
+			[PSCustomObject[]]$Results = @()
+
 			switch ($PSCmdlet.ParameterSetName)
 			{
 				"Get" {
@@ -1193,9 +1208,23 @@ Function Get-CEBlueprint {
 					{
 						$Uri += "/$($Id.ToString())"
 					}
+
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+					if ($Result.StatusCode -eq 200)
+					{
+						$Results += ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+					}
+					else
+					{
+						throw "There was an issue retrieving blueprints: $($Result.StatusCode) $($Result.StatusDescription) - $($Result.Content)"
+					}
+
 					break
 				}
 				"List" {
+
+					# If non default values for either were specified, update the URI
 					if ($Offset -gt 0 -or $Limit -lt 1500)
 					{
 						$QueryString = [System.String]::Empty
@@ -1213,6 +1242,48 @@ Function Get-CEBlueprint {
 						# Remove the first character which is an unecessary ampersand
 						$Uri += "?$($QueryString.Substring(1))"
 					}
+
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
+
+					if ($Result.StatusCode -eq 200)
+					{
+						$Results += ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+					}
+					else
+					{
+						throw "There was an issue retrieving blueprints: $($Result.StatusCode) $($Result.StatusDescription) - $($Result.Content)"
+					}
+					
+					break
+				}
+				"All" {
+
+					$Offset = 0
+					$Limit = 1500
+					[System.Int32]$ResultCount = 0
+
+					# Go until the results returned are less than the specified limit
+					do
+					{
+						Write-Verbose -Message "Querying blueprints from $Offset to $($Offset + $Limit)."
+
+						[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
+						[System.String]$TempUri = "$Uri$QueryString"
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $TempUri -Method Get -WebSession $SessionInfo.Session
+
+						if ($Result.StatusCode -eq 200)
+						{
+							[PSCustomObject[]]$Content = ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+							$Results += $Content
+							$ResultCount = $Content.Length
+							$Offset += $Limit
+						}
+						else
+						{
+							throw "There was an issue retrieving blueprints: $($Result.StatusCode) $($Result.StatusDescription) - $($Result.Content)"
+						}
+					} while ($ResultCount -ge $Limit)
+
 					break
 				}
 				default {
@@ -1220,25 +1291,15 @@ Function Get-CEBlueprint {
 					break
 				}
 			}
-			
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session
-        
-			if ($Result.StatusCode -eq 200)
+
+			if ($PSCmdlet.ParameterSetName -eq "Get")
 			{
-				if ($Id -ne [System.Guid]::Empty)
-				{
-					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
-				}
-				else 
-				{
-					Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
-				}
+				Write-Output -InputObject $Results[0]
 			}
 			else
 			{
-				Write-Warning -Message "There was an issue retrieving blueprints: $($Result.StatusCode) $($Result.StatusDescription) - $($Result.Content)"
+				Write-Output -InputObject $Results
 			}
-
 		}
 		else 
 		{
@@ -1263,6 +1324,8 @@ Function Set-CEBlueprint {
 		.PARAMETER Blueprint
 			The updated blueprint data to send. This hashtable only needs to contain the data that you want to update. The original blueprint will be merged with this one.
 
+			If you specify a blueprint, all other configuration parameters are ignored.
+
 			The available configuration items are:
 
 			{
@@ -1275,7 +1338,6 @@ Function Set-CEBlueprint {
 				}
 			  ],
 			  "publicIPAction": "ALLOCATE",		# "ALLOCATE" "DONT_ALLOCATE" "AS_SUBNET"
-			  "machineName": "string",
 			  "privateIPs": [
 				"string"
 			  ],
@@ -1324,9 +1386,6 @@ Function Set-CEBlueprint {
 		.PARAMETER SecurityGroupIds
 			AWS Only. The security groups that will be associated with the instance.
 
-		.PARAMETER MachineName
-			The name of the replica instance.
-
 		.PARAMETER StaticIP
 			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
 
@@ -1348,6 +1407,9 @@ Function Set-CEBlueprint {
 
 		.PARAMETER InstanceId
 			The id of the CE instance whose blueprint you want to update.
+
+		.PARAMETER BlueprintId
+			The id of the CE blueprint you want to update.
 
 		.PARAMETER ProjectId
 			The project Id to use to retrieve the details. This defaults to the current project retrieved from the login.
@@ -1415,16 +1477,22 @@ Function Set-CEBlueprint {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 9/7/2017
+			LAST UPDATE: 9/26/2017
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
     [OutputType([PSCustomObject])]
     Param(
-		[Parameter(Mandatory = $true)]
+		[Parameter(Mandatory = $true, ParameterSetName = "Instance")]
 		[ValidateScript({
 			$_ -ne [System.Guid]::Empty
 		})]
         [System.Guid]$InstanceId = [System.Guid]::Empty,
+
+		[Parameter(Mandatory = $true, ParameterSetName = "Id")]
+		[ValidateScript({
+			$_ -ne [System.Guid]::Empty
+		})]
+        [System.Guid]$BlueprintId = [System.Guid]::Empty,
 
 		[Parameter(Mandatory = $true, ParameterSetName = "Blueprint", ValueFromPipeline = $true, Position = 0)]
 		[ValidateNotNull()]
@@ -1438,22 +1506,9 @@ Function Set-CEBlueprint {
 		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBNET")]
 		[System.String]$PublicIPAction,
 
-		[Parameter(ParameterSetName = "AWS")]
-		[System.Boolean]$RunAfterLaunch,
-
 		[Parameter()]
 		[ValidateSet("DONT_CREATE", "CREATE_NEW", "EXISTING", "IF_IN_ORIGIN")]
 		[System.String]$StaticIPAction,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[System.Collections.Hashtable]$Tags,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable[]]$Disks,
-
-		[Parameter(ParameterSetName = "GCP")]
-		[System.String]$SubnetsHostProject,
 
 		[Parameter()]
 		[ValidateNotNullOrEmpty()]
@@ -1473,41 +1528,73 @@ Function Set-CEBlueprint {
         [System.String]$Session = [System.String]::Empty,
 
 		[Parameter()]
-		[Switch]$PassThru
+		[Switch]$PassThru,
+
+		[Parameter()]
+		[Switch]$Force
     )
 
 	DynamicParam {
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $DynSessionInfo = $script:Sessions.Get_Item($Session)
-			$DynSession = $Session
-        }
-        else {
-            $DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-            $DynSession = $DynSessionInfo.User.Username
-        }
-
-		$DynSplat = @{
-			"Session" = $DynSession
-		}
-
-		if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
-		{
-			$DynSplat.Add("ProjectId", $ProjectId)
-		}
 
 		# Create the dictionary 
         [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
-		
-		if ($InstanceId -ne $null -and $InstanceId -ne [System.Guid]::Empty) 
+
+		# If an Instance or blueprint Id was presented, then start generating the dynamic parameters
+		# Don't check blueprint, it could still be set from a previous run
+		if (($BlueprintId -ne $null -and $BlueprintId -ne [System.Guid]::Empty) -or ($InstanceId -ne $null -and $InstanceId -ne [System.Guid]::Empty) -and -not $PSBoundParameters.ContainsKey("Blueprint"))
 		{
+			if (-not [System.String]::IsNullOrEmpty($Session)) {
+				$DynSessionInfo = $script:Sessions.Get_Item($Session)
+				$DynSession = $Session
+			}
+			else {
+				$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+				$DynSession = $DynSessionInfo.User.Username
+			}
+
+			$DynSplat = @{
+				"Session" = $DynSession
+			}
+
+			if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
+			{
+				$DynSplat.Add("ProjectId", $ProjectId)
+			}
+
 			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud @DynSplat | ConvertTo-Hashtable
-			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $InstanceId @DynSplat | ConvertTo-Hashtable
+			
+			if ($BlueprintId -ne $null -and $BlueprintId -ne [System.Guid]::Empty)
+			{
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $BlueprintId @DynSplat | ConvertTo-Hashtable
+			}
+			else
+			{
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -All @DynSplat | Where-Object {$_.machineId -eq $InstanceId} | Select-Object -First 1 | ConvertTo-Hashtable
+			}
 
 			#region InstanceType
 
 			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet $CECloud.InstanceTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
 			#endregion
+
+			if ($PrivateIPAction -ieq "CUSTOM_IP" -or $ExistingBlueprint.PrivateIPAction -ieq "CUSTOM_IP")
+			{
+				#region PrivateIPs
+
+				New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -Mandatory:($PrivateIPAction -ieq "CUSTOM_IP") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+				#endregion
+			}
+
+			if ($StaticIPAction -ieq "EXISTING" -or $ExistingBlueprint.StaticIPAction -ieq "EXISTING")
+			{
+				#region EIP
+
+				New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory:($StaticIPAction -ieq "EXISTING") -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+				#endregion
+			}
 
 			switch ($CECloud.Cloud)
 			{
@@ -1518,8 +1605,26 @@ Function Set-CEBlueprint {
 					$IAMSet = $CECloud.IAMRoles
 					$IAMSet += [System.String]::Empty
 
-					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $IAMSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ValidateSet $IAMSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
         
+					#endregion
+
+					#region RunAfterLaunch
+
+					New-DynamicParameter -Name "RunAfterLaunch" -Type ([System.Boolean]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+
+					#region Tags
+
+					New-DynamicParameter -Name "Tags" -Type ([System.Collections.Hashtable]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+
+					#region Disks
+
+					New-DynamicParameter -Name "Disks" -Type ([System.Collections.Hashtable[]]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
 					#endregion
 
 					if ($CECloud.PlacementGroups.Length -gt 0)
@@ -1529,7 +1634,7 @@ Function Set-CEBlueprint {
 						$PlacementSet = $CECloud.PlacementGroups
 						$PlacementSet += [System.String]::Empty
 
-						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $PlacementSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet $PlacementSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
         
 						#endregion
 					}
@@ -1541,16 +1646,7 @@ Function Set-CEBlueprint {
 						$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
 						$SubnetSet += "Default"
 
-						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-						#endregion
-					}
-
-					if ($PrivateIPAction -ieq "CUSTOM_IP" -or $ExistingBlueprint.PrivateIPAction -ieq "CUSTOM_IP")
-					{
-						#region PrivateIPs
-
-						New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -Mandatory:($PrivateIPAction -ieq "CUSTOM_IP") -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
 						#endregion
 					}
@@ -1572,7 +1668,7 @@ Function Set-CEBlueprint {
 						}
 					}
 
-					$Subnet = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Name -ieq $Key -or $_.Id -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
+					$Subnet = $CECloud.Subnets | Where-Object {$_.Name -ieq $Key -or $_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
 
 					if ($Subnet -ne $null -or ($ExistingBlueprint.SubnetIDs -ne $null -and $ExistingBlueprint.SubnetIDs.Length -gt 0))
 					{
@@ -1581,15 +1677,15 @@ Function Set-CEBlueprint {
 							$VpcId = $Subnet.NetworkId
 						}
 						else {
-							$VpcId = $CECloud | Select-Object -ExpandProperty Subnets | Where-Object {$_.Id -ieq $ExistingBlueprint.SubnetIDs[0]} | Select-Object -First 1 -ErrorAction SilentlyContinue
+							$VpcId = $CECloud.Subnets | Where-Object {$_.Id -ieq $ExistingBlueprint.SubnetIDs[0]} | Select-Object -First 1 -ErrorAction SilentlyContinue
 						}
 
 						#region SecurityGroups
 
-						$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -ieq $VpcId}
+						$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -ieq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
 						$SGSet += [System.String]::Empty
 
-						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
         
 						#endregion
 					}
@@ -1597,6 +1693,7 @@ Function Set-CEBlueprint {
 					break
 				}
 				"GCP" {
+					New-DynamicParameter -Name "SubnetsHostProject" -Type ([System.String]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
 					break
 				}
@@ -1607,15 +1704,6 @@ Function Set-CEBlueprint {
 				default {
 					throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
 				}
-			}
-
-			if ($StaticIPAction -ieq "EXISTING" -or $ExistingBlueprint.StaticIPAction -ieq "EXISTING")
-			{
-				#region EIP
-
-				New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory:($StaticIPAction -ieq "EXISTING") -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-				#endregion
 			}
 		}
 
@@ -1647,7 +1735,14 @@ Function Set-CEBlueprint {
 				$SessSplat.Add("ProjectId", $ProjectId)
 			}
 
-			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $InstanceId @SessSplat | ConvertTo-Hashtable
+			if ($BlueprintId -ne [System.Guid]::Empty)
+			{
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $BlueprintId @DynSplat | ConvertTo-Hashtable
+			}
+			else
+			{
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -All @DynSplat | Where-Object {$_.machineId -eq $InstanceId} | Select-Object -First 1 | ConvertTo-Hashtable
+			}
 
 			# If a blueprint hashtable wasn't provided, build one for the parameter set being used
 			if ($PSCmdlet.ParameterSetName -ne "Blueprint")
@@ -1655,7 +1750,7 @@ Function Set-CEBlueprint {
 				# Convert only the non-common parameters specified into a hashtable
 				$Params = @{}
 
-				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key) -and -not @("BlueprintId", "InstanceId").Contains($_.Key)})
                 {
 					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
                     $Params.Add($Item.Key, $Sets)
@@ -1686,13 +1781,13 @@ Function Set-CEBlueprint {
 
 							if ($Item.Key -ieq "Tags")
 							{
-								$Tags = @()
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
 								# We need to convert the hashtable to the tag key/value structure
 								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
 								}
 
-								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $Tags)
+								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $TagsToAdd)
 							}
 							else {
 								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $PSBoundParameters[$Item.Key])
@@ -2252,13 +2347,13 @@ Function New-CEReplicationConfiguration {
 							
 							if ($Item.Key -ieq "ReplicationTags")
 							{
-								$Tags = @()
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
 								# We need to convert the hashtable to the tag key/value structure
 								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
 								}
 
-								$Config.Add("replicationTags", $Tags)
+								$Config.Add("replicationTags", $TagsToAdd)
 							}
                             # The friendly name or the id of the subnet was provided at the command line
                             elseif ($Item.Key -ieq "SubnetId") 
@@ -2532,14 +2627,13 @@ Function Get-CEReplicationConfiguration {
 					$Offset = 0
 					$Limit = 1500
 
-					[System.UInt32]$Count = $Limit
 					[System.Int32]$ResultCount = 0
 					[System.Boolean]$Found = $false
 					$ReplConfig = $null
 
 					# Go until the results returned are less than the specified limit or the loop
 					# breaks when the config is found
-					while ($Count -ge $ResultCount)
+					do
 					{
 						Write-Verbose -Message "Querying replication configurations from $Offset to $($Offset + $Limit)."
 
@@ -2571,7 +2665,7 @@ Function Get-CEReplicationConfiguration {
 							# Break out of the loop
 							break
 						}
-					}
+					} while ($ResultCount -ge $Limit)
 
 					if (-not $Found)
 					{
@@ -2783,8 +2877,8 @@ Function Set-CEReplicationConfiguration {
 					#region SubnetId
 
 					# Allow user to specify either the long name or the subnet id in the parameter
-					[System.String[]]$SubnetSet = $CECloud | Select-Object -ExpandProperty Subnets | Select-Object -ExpandProperty Name
-					$SubnetSet += $CECloud | Select-Object -ExpandProperty Subnets | Select-Object -ExpandProperty SubnetId
+					[System.String[]]$SubnetSet = $CECloud.Subnets | Select-Object -ExpandProperty Name
+					$SubnetSet += $CECloud.Subnets | Select-Object -ExpandProperty SubnetId
 
 					New-DynamicParameter -Name "SubnetId" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
@@ -2799,7 +2893,7 @@ Function Set-CEReplicationConfiguration {
 						{
 							#region KMS
 
-							[System.Collections.ArrayList]$KMSSet = $CECloud | Select-Object -ExpandProperty VolumeEncryptionKeys | Where-Object {$_.KeyArn -ne $null } | Select-Object -ExpandProperty KeyArn
+							[System.Collections.ArrayList]$KMSSet = $CECloud.VolumeEncryptionKeys | Where-Object {$_.KeyArn -ne $null } | Select-Object -ExpandProperty KeyArn
 							$KMSSet += "Default"
 							$KMSSet += [System.String]::Empty
 
@@ -2822,7 +2916,7 @@ Function Set-CEReplicationConfiguration {
 							}
 						}
 
-						$VpcId = $CECloud | Select-Object -ExpandProperty Subnets |
+						$VpcId = $CECloud.Subnets |
 							Where-Object {$_.Name -ieq $SubnetId -or $_.Id -ieq $SubnetId} | 
 							Select-Object -ExpandProperty NetworkId -ErrorAction SilentlyContinue
 
@@ -2832,9 +2926,7 @@ Function Set-CEReplicationConfiguration {
 						if (-not [System.String]::IsNullOrEmpty($VpcId))
 						{
 							#region SecurityGroups
-							$SGSet = $CECloud | Select-Object -ExpandProperty SecurityGroups | 
-								Where-Object {$_.NetworkId -ieq $VpcId} | 
-								Select-Object -ExpandProperty SecurityGroupId
+							$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -ieq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
 							$SGSet += [System.String]::Empty
 
 							New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
@@ -2926,18 +3018,17 @@ Function Set-CEReplicationConfiguration {
 
 							if ($Item.Key -ieq "ReplicationTags")
 							{
-								$Tags = @()
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
 								# We need to convert the hashtable to the tag key/value structure
 								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
-									$Tags += @{"key" = $_.Key; "value" = $_.Value}
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
 								}
 
-								$Config.Add("replicationTags", $Tags)
+								$Config.Add("replicationTags", $TagsToAdd)
 							}
 							elseif ($Item.Key -ieq "SubnetId") 
 							{
-								[System.String]$SubnetId = $CECloud | 
-									Select-Object -ExpandProperty Subnets | 
+								[System.String]$SubnetId = $CECloud.Subnets | 
 									Where-Object {$_.Name -ieq $PSBoundParameters["SubnetId"] -or $_.Id -ieq $PSBoundParameters["SubnetId"]} | 
 									Select-Object -First 1 -ExpandProperty Id
 
@@ -4919,14 +5010,13 @@ Function Get-CECloud {
 					$Offset = 0
 					$Limit = 1500
 
-					[System.UInt32]$Count = $Limit
 					[System.Int32]$ResultCount = 0
 					[System.Boolean]$Found = $false
 					$Cloud = $null
 
 					# Go until the results returned are less than the specified limit or the loop
 					# breaks when the config is found
-					while ($Count -ge $ResultCount)
+					do
 					{
 						Write-Verbose -Message "Querying clouds from $Offset to $($Offset + $Limit)."
 
@@ -4958,7 +5048,7 @@ Function Get-CECloud {
 							break
 						}
 
-					}
+					} while ($ResultCount -ge $Limit)
 
 					if (-not $Found)
 					{

@@ -52,6 +52,9 @@ The commands will get all of the blueprints in both accounts.**
 
 ## Revision History
 
+### 1.1.0.1
+Fixed numerous bugs in the Blueprint cmdlets.
+
 ### 1.1.0.0
 Updated module for 100% API coverage including all target cloud environments, AWS, Azure, GCP, and Generic. This includes several additional cmdlets:
 
