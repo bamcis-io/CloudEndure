@@ -1,7 +1,7 @@
 # CloudEndure
 
 ## Information
-The cmdlets support and have been tested against v12 of the CloudEndure API. Currently, the "latest" version redirects to v12, although there are newer versions documented.
+The cmdlets have been tested against v12 of the CloudEndure API. Currently, the "latest" version redirects to v12 in the CE console, although there are newer versions documented. The module has been updated to include cmdlets in the v15 API.
 
 ## Usage
 
