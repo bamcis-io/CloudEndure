@@ -1,7 +1,7 @@
 # CloudEndure
 
 ## Information
-Currently, the cmdlets only support AWS environments being used as a migration target. Additional cloud environments as well as DR account support will be added as requested/needed.
+The cmdlets support and have been tested against v12 of the CloudEndure API. Currently, the "latest" version redirects to v12, although there are newer versions documented.
 
 ## Usage
 
@@ -51,6 +51,21 @@ The commands will get all of the blueprints in both accounts.**
     Remove-CESession
 
 ## Revision History
+
+### 1.2.0.0
+Update the module to comply with the new version (v15) of the API. Added new cmdlets:
+
+		Suspend-CEDataReplication
+		Invoke-CELaunchTargetMachine
+		Move-CEMachine
+		Set-CEMachine
+		Get-CEMachineBandwidth
+		Set-CEMachineBandwidth
+
+All cmdlets that are version specific will throw a runtime exception if the version the CE account is tied to is not supported by the cmdlet.
+
+### 1.1.0.2
+Removed the Get-CEAccountSummary cmdlet because it was using an undocumented API. Added the Get-CEAccountExtendedInfo cmdlet. Updated the error handling for all of the Invoke-WebRequest calls to make errors more accessible.
 
 ### 1.1.0.1
 Fixed numerous bugs in the Blueprint cmdlets.
