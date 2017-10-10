@@ -18,6 +18,7 @@ $script:ProfileLocation = "$env:USERPROFILE\.cloudendure\credentials"
 	"AWS EU (London)" = "0191fdf5-779f-4a54-a0ce-6e3b5157ce36";
 	"AWS Canada (Central)" = "910a2cd6-0298-4c9b-82f5-74d6bd265211"
 }
+
 [System.Collections.Hashtable]$script:CloudIds = @{
 	"AWS" = "4c7b3582-9e73-4866-858a-8e1ac6e818b3";
 	"Generic" = "f54420d5-3de4-40bb-b35b-33d32ad8c8ef";
@@ -3994,13 +3995,13 @@ Function Set-CEEmailNotifications {
 			The cmdlet either disables or enables email notifications.
 
 		.PARAMETER Enabled
-			Specifies that email notifications are enabled.
+			Specifies that email notifications will be enabled for the specified projects.
 
 		.PARAMETER Disabled
-			Specifies that email notifications are disabled.
+			Specifies that email notifications will be disabled for the specified projects.
 
-		.PARAMETER ProjectId
-			The project Id to enable or disable notifications for. This defaults to the current project retrieved from the login.
+		.PARAMETER Ids
+			The project Ids to enable or disable notifications for. This defaults to the current project retrieved from the login.
 
         .PARAMETER Session
             The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
@@ -4011,13 +4012,18 @@ Function Set-CEEmailNotifications {
         .EXAMPLE
             Set-CEEmailNotifications -Enabled
 
-			Enables email notifications for the current user.
+			Enables email notifications on the default for the current user.
+
+		.EXAMPLE
+			Set-CEEmailNotifications -Disabled -Ids @("c933c984-6dae-431b-a1f4-3063e66c438f")
+
+			Disables notifications for the specified project in the current user's settings.
 
         .INPUTS
             None
 
         .OUTPUTS
-           None
+			None or System.Management.Automation.PSCustomObject
 
 			This is a JSON representation of the returned value
 
@@ -4038,7 +4044,7 @@ Function Set-CEEmailNotifications {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/6/2017
+			LAST UPDATE: 10/10/2017
     #>
     [CmdletBinding()]
     [OutputType([System.Management.Automation.PSCustomObject])]
@@ -4053,7 +4059,7 @@ Function Set-CEEmailNotifications {
 		[ValidateScript({
 			$_ -ne [System.Guid]::Empty
 		})]
-		[System.Guid]$ProjectId = [System.Guid]::Empty,
+		[System.Guid[]]$Ids = @(),
 
 		[Parameter()]
 		[Switch]$PassThru,
@@ -4084,16 +4090,40 @@ Function Set-CEEmailNotifications {
 		{
 			[System.String]$Uri = "$($SessionInfo.Url)/users/$($SessionInfo.User.Id)"
 
-			[System.String[]]$Ids = @()
-
 			if ($Enabled) 
 			{
-				if ($ProjectId -eq [System.Guid]::Empty)
+				if ($Ids.Length -eq 0)
 				{
-					$ProjectId = $SessionInfo.ProjectId
+					$Ids += $SessionInfo.ProjectId
+				}
+			}
+			else 
+			{
+				$CurrentSetup = Get-CEUser -Session $Session
+				[System.Guid[]]$CurrentProjects = $CurrentSetup.Settings.SendNotifications.ProjectIds
+				
+				[System.Guid[]]$RemaingProjects = @()
+
+				# Remove the Ids specified by the user by adding the current items that don't match
+				# to a temporary array
+				foreach ($Id in $CurrentProjects)
+				{
+					if (-not $Ids.Contains($Id))
+					{
+						$RemaingProjects += $Id
+					}
 				}
 
-				$Ids += $ProjectId
+				# Iterate again to warn the user if they specified projects that weren't currently enabled
+				foreach ($Id in $Ids)
+				{
+					if (-not $CurrentProjects.Contains($Id))
+					{
+						Write-Warning -Message "Could not find a project $Id that was enabled for notifications for the current user."
+					}
+				}
+
+				$Ids = $RemaingProjects
 			}
 
 			[System.String]$Body = ConvertTo-Json -InputObject @{"id" = $SessionInfo.User.Id; "settings" = @{"sendNotifications" = @{"projectIds" = $Ids}}} -Depth 3
@@ -7824,7 +7854,7 @@ Function New-CEInstallationToken {
 			}
 			else
 			{
-				Write-Warning -Message "There was an issue replacing the installation token: $StatusCode $Reason - $($Result.Content)"
+				throw "There was an issue replacing the installation token: $StatusCode $Reason - $($Result.Content)"
 			}
 		}
 		else 
@@ -7920,7 +7950,7 @@ Function Get-CEInstallationToken {
 			}
 			else
 			{
-				Write-Warning -Message "There was an issue retrieving the agent installation token: $StatusCode $Reason - $($Result.Content)"
+				throw "There was an issue retrieving the agent installation token: $StatusCode $Reason - $($Result.Content)"
 			}
 		}
 		else 
@@ -8164,7 +8194,7 @@ If you continue, you will begin to incur additional costs from $Target for data 
 				}
 				else
 				{
-					Write-Warning -Message "There was an issue starting replication: $StatusCode $Reason - $($Result.Content)"
+					throw "There was an issue starting replication: $StatusCode $Reason - $($Result.Content)"
 				}
 			}
 		}
@@ -8284,7 +8314,7 @@ Function Stop-CEDataReplication {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 9/11/2017
+			LAST UPDATE: 10/9/2017
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
 	[OutputType([PSCustomObject])]
@@ -8399,7 +8429,7 @@ $(if ($Ids.Length -gt 1) { "These instances" } else { "This instance" }) will st
 				}
 				else
 				{
-					Write-Warning -Message "There was an issue stopping replication: $StatusCode $Reason - $($Result.Content)"
+					throw "There was an issue stopping replication: $StatusCode $Reason - $($Result.Content)"
 				}				
 			}
 		}
@@ -8880,7 +8910,7 @@ Are you sure you want to perform a failover?
 				}
 				else
 				{
-					Write-Warning -Message "There was an issue starting the failover: $StatusCode $Reason - $($Result.Content)"
+					throw "There was an issue starting the failover: $StatusCode $Reason - $($Result.Content)"
 				}
 			}
 		}
@@ -8943,7 +8973,7 @@ Function Invoke-CEMachineTest {
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 9/11/2017
+			LAST UPDATE: 10/9/2017
 	#>
 	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH", DefaultParameterSetName = "Latest")]
 	[OutputType([PSCustomObject])]
@@ -9094,7 +9124,7 @@ Any previously launched versions of these instances (including any associated cl
 				}
 				else
 				{
-					Write-Warning -Message "There was an issue launching the test: $StatusCode $Reason - $($Result.Content)"
+					throw "There was an issue launching the test: $StatusCode $Reason - $($Result.Content)"
 				}
 			}
 		}
@@ -9255,7 +9285,7 @@ Any previously launched versions of these instances (including any associated cl
 				}
 				else
 				{
-					Write-Warning -Message "There was an issue launching the cutover: $StatusCode $Reason - $($Result.Content)"
+					throw "There was an issue launching the cutover: $StatusCode $Reason - $($Result.Content)"
 				}
 			}
 		}
@@ -9310,7 +9340,7 @@ Function Get-CEJobs {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 9/11/2017
+			LAST UPDATE: 10/9/2017
     #>
     [CmdletBinding()]
     [OutputType([System.Management.Automation.PSCustomObject], [System.Management.Automation.PSCustomObject[]])]
@@ -9393,7 +9423,7 @@ Function Get-CEJobs {
 			}										
 			else
 			{
-				Write-Warning -Message "There was an issue getting the jobs: $StatusCode $Reason - $($Result.Content)"
+				throw "There was an issue getting the jobs: $StatusCode $Reason - $($Result.Content)"
 			}
 		}
 		else 
