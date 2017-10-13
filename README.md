@@ -52,6 +52,9 @@ The commands will get all of the blueprints in both accounts.**
 
 ## Revision History
 
+### 1.2.0.2
+Fixed Remove-CEProfile.
+
 ### 1.2.0.1
 Fixed bug in Invoke-CEMachineCutover adding the Ids to a collection.
 

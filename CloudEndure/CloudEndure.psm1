@@ -312,7 +312,9 @@ Function Remove-CEProfile {
 
 					if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
 					{
-						Set-Content -Path $ProfileLocation -Value (ConvertTo-Json -InputObject ($Json | Select-Object -ExcludeProperty $ProfileName))
+						# This returns void, so do it first, then pass the $Json variable
+						$Json.PSObject.Properties.Remove($ProfileName)
+						Set-Content -Path $ProfileLocation -Value (ConvertTo-Json -InputObject $Json)
 
 						if ($PassThru) 
 						{
