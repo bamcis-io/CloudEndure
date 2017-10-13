@@ -9249,7 +9249,7 @@ Any previously launched versions of these instances (including any associated cl
 
 			foreach ($Id in $Ids)
 			{
-				$Body.items.Add(@{"machineId" = $Id})
+				$Body.items += @{"machineId" = $Id}
 			}
 
 			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
@@ -9865,7 +9865,7 @@ Function Invoke-CELaunchTargetMachine {
 				$Items = @()
 				foreach ($Item in $Ids)
 				{
-					$Items.Add(@{"Id" = $Item})
+					$Items += @{"Id" = $Item}
 				}
 			}
 

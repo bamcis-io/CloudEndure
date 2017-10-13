@@ -1,7 +1,7 @@
 # CloudEndure
 
 ## Information
-The cmdlets support and have been tested against v12 of the CloudEndure API. Currently, the "latest" version redirects to v12, although there are newer versions documented.
+The cmdlets have been tested against v12 of the CloudEndure API. Currently, the "latest" version redirects to v12 in the CE console, although there are newer versions documented. The module has been updated to include cmdlets in the v15 API.
 
 ## Usage
 
@@ -51,6 +51,9 @@ The commands will get all of the blueprints in both accounts.**
     Remove-CESession
 
 ## Revision History
+
+### 1.2.0.1
+Fixed bug in Invoke-CEMachineCutover adding the Ids to a collection.
 
 ### 1.2.0.0
 Update the module to comply with the new version (v15) of the API. Added new cmdlets:
