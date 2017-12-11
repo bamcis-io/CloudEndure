@@ -349,6 +349,8 @@ Function New-CESession {
         .PARAMETER Version
             The version of the API this session will use. This defaults to "LATEST".
 
+			This parameter is deprecated, the CE API set handles selecting the correct version for you based on your account and this parameter has no effect.
+
         .PARAMETER Credential
             The credential to use to connect to the CE console.
 
@@ -378,7 +380,7 @@ Function New-CESession {
 	Param(
 		[Parameter()]
 		[ValidateNotNullOrEmpty()]
-		[ValidateSet("v12", "latest")]
+		[ValidateSet("v12", "latest", "v3", "v2")]
 		[System.String]$Version = "latest",
 
 		[Parameter(Mandatory = $true, ParameterSetName = "Credential")]
@@ -437,7 +439,13 @@ Function New-CESession {
 			}
 		}
 
-        [System.String]$Uri = "$script:URL/$($Version.ToLower())/login"
+		if ($Version -eq "v2")
+		{
+			$Version = "v12"
+		}
+
+		# Always logon to latest
+        [System.String]$Uri = "$script:URL/latest/login"
         [System.String]$Body = ConvertTo-Json -InputObject @{"username" = $Credential.UserName; "password" = (Convert-SecureStringToString -SecureString $Credential.Password) }
 		
 		$StatusCode = 0
@@ -449,9 +457,25 @@ Function New-CESession {
 			$Reason = $Result.StatusDescription
 		}
 		catch [System.Net.WebException] {
-			[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-			$StatusCode = [System.Int32]$Response.StatusCode
-			$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+			[System.Net.WebException]$Ex = $_.Exception
+
+			if ($Ex.Response -eq $null)
+			{
+				$Reason = "$($Ex.Status): $($Ex.Message)"
+				$StatusCode = 500
+			}
+			else
+			{
+				[System.Net.HttpWebResponse]$Response = $Ex.Response
+				$StatusCode = [System.Int32]$Response.StatusCode
+			
+				[System.IO.Stream]$Stream = $Response.GetResponseStream()
+				[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+				[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+				$Content = $Reader.ReadToEnd()
+
+				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+			}
 		}
 		catch [Exception]  {
 			$Reason = $_.Exception.Message
@@ -464,8 +488,20 @@ Function New-CESession {
 				# it to use on all subsequent requests
 				[System.String]$Url = $Result.BaseResponse.ResponseUri.ToString().Substring(0,  $Result.BaseResponse.ResponseUri.ToString().LastIndexOf("/"))
 
+				[Microsoft.PowerShell.Commands.WebRequestSession]$WebSession = $WebSession
+
 				$Temp = ConvertFrom-Json -InputObject $Result.Content
 				$WebSession.Credentials = $Credential
+
+				# Add functionality for new XSRF token included in login for v3, which now must be presented
+				# in the header of each request
+				[System.Net.CookieCollection]$Cookies = $WebSession.Cookies.GetCookies($Url)
+				[System.Net.Cookie]$MatchingCookie = $Cookies | Where-Object {$_.Name -ieq "XSRF-TOKEN"} | Select-Object -First 1
+
+				if ($MatchingCookie -ne $null)
+				{
+					$WebSession.Headers.Add("X-XSRF-TOKEN", $MatchingCookie.Value)
+				}
 
 				try {
 					#[System.String]$ExtendedInfoUri = "$script:URL/$($Version.ToLower())/extendedAccountInfo"
@@ -482,15 +518,25 @@ Function New-CESession {
 
 					$DefaultCreds = $Creds[0]
 
-					[System.String]$Version = $Url.Substring($Url.LastIndexOf("/") + 1)
+					[System.String]$Ver = $Url.Substring($Url.LastIndexOf("/") + 1)
 
-					if ($Version -match "[vV][0-9]+")
+					if ($Ver -match "[vV][0-9]+")
 					{
-						$Version = $Version.Substring(1);
+						$Ver = $Version.Substring(1);
+						
+						# Update the v12 in the url to comply with the new versioning scheme
+						if ($Ver -eq 12)
+						{
+							$Ver = 2
+						}
+					}
+					else
+					{
+						$Ver = "latest"
 					}
 
 					#[System.Collections.Hashtable]$Session = @{Session = $WebSession; ProjectId = $Summary.Projects.Items[0].Id; DefaultProject = $Summary.Projects.Items[0]; DefaultCloudCredentials = $Summary.Projects.Items[0].CloudCredentialsIDs[0]; User = $Summary.User; }	
-					[System.Collections.Hashtable]$Session = @{Session = $WebSession; Url = $Url; ProjectId = $DefaultProject.Id; DefaultProject = $DefaultProject; DefaultCloudCredentials = $DefaultCreds.Id; User = $Temp; Version = $Version }	
+					[System.Collections.Hashtable]$Session = @{Session = $WebSession; Url = $Url; ProjectId = $DefaultProject.Id; DefaultProject = $DefaultProject; DefaultCloudCredentials = $DefaultCreds.Id; User = $Temp; Version = $Ver }	
 
 					if ($script:Sessions.ContainsKey($Temp.Username)) {
 						$script:Sessions.Set_Item($Temp.Username.ToLower(), $Session)
@@ -643,9 +689,25 @@ Function Remove-CESession {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -675,9 +737,25 @@ Function Remove-CESession {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -1129,9 +1207,25 @@ Function New-CEBlueprint {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -1330,9 +1424,25 @@ Function Get-CEBlueprint {
 						$Reason = $Result.StatusDescription
 					}
 					catch [System.Net.WebException] {
-						[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-						$StatusCode = [System.Int32]$Response.StatusCode
-						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
 					}
 					catch [Exception]  {
 						$Reason = $_.Exception.Message
@@ -1379,9 +1489,25 @@ Function Get-CEBlueprint {
 						$Reason = $Result.StatusDescription
 					}
 					catch [System.Net.WebException] {
-						[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-						$StatusCode = [System.Int32]$Response.StatusCode
-						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
 					}
 					catch [Exception]  {
 						$Reason = $_.Exception.Message
@@ -1421,9 +1547,25 @@ Function Get-CEBlueprint {
 							$Reason = $Result.StatusDescription
 						}
 						catch [System.Net.WebException] {
-							[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-							$StatusCode = [System.Int32]$Response.StatusCode
-							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
 						}
 						catch [Exception]  {
 							$Reason = $_.Exception.Message
@@ -1990,9 +2132,25 @@ Function Set-CEBlueprint {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -2160,9 +2318,25 @@ Function Get-CEMachineRecoveryPoints {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -2262,9 +2436,9 @@ Function Get-CEMachineBandwidth {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -2283,9 +2457,25 @@ Function Get-CEMachineBandwidth {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -2401,9 +2591,9 @@ Function Set-CEMachineBandwidth {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -2425,9 +2615,25 @@ Function Set-CEMachineBandwidth {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -2924,9 +3130,25 @@ Function New-CEReplicationConfiguration {
 							$Reason = $PostResult.StatusDescription
 						}
 						catch [System.Net.WebException] {
-							[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-							$StatusCode = [System.Int32]$Response.StatusCode
-							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
 						}
 						catch [Exception]  {
 							$Reason = $_.Exception.Message
@@ -3126,9 +3348,25 @@ Function Get-CEReplicationConfiguration {
 							$Reason = $Result.StatusDescription
 						}
 						catch [System.Net.WebException] {
-							[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-							$StatusCode = [System.Int32]$Response.StatusCode
-							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
 						}
 						catch [Exception]  {
 							$Reason = $_.Exception.Message
@@ -3195,9 +3433,25 @@ Function Get-CEReplicationConfiguration {
 						$Reason = $Result.StatusDescription
 					}
 					catch [System.Net.WebException] {
-						[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-						$StatusCode = [System.Int32]$Response.StatusCode
-						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
 					}
 					catch [Exception]  {
 						$Reason = $_.Exception.Message
@@ -3588,9 +3842,25 @@ Function Set-CEReplicationConfiguration {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -3726,9 +3996,25 @@ Function Remove-CEReplicationConfiguration {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -3836,9 +4122,25 @@ Function Get-CEUser {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -3956,9 +4258,25 @@ Function Set-CEConsolePassword {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -4141,9 +4459,25 @@ Function Set-CEEmailNotifications {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -4286,9 +4620,25 @@ Function Get-CEAccount {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -4517,9 +4867,9 @@ Function Get-CEAccountExtendedInfo {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			[System.String]$Uri = "$($SessionInfo.Url)/extendedAccountInfo"
@@ -4533,9 +4883,25 @@ Function Get-CEAccountExtendedInfo {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -4697,9 +5063,25 @@ Function Get-CELicense {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -4891,9 +5273,9 @@ Function New-CEProject {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			# If a config hashtable wasn't provided, build one for the parameter set being used
@@ -4975,9 +5357,25 @@ Function New-CEProject {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -5181,9 +5579,25 @@ Function Get-CEProject {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -5486,9 +5900,25 @@ Function Set-CEProject {
 						$Reason = $Result.StatusDescription
 					}
 					catch [System.Net.WebException] {
-						[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-						$StatusCode = [System.Int32]$Response.StatusCode
-						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
 					}
 					catch [Exception]  {
 						$Reason = $_.Exception.Message
@@ -5588,9 +6018,9 @@ Function Remove-CEProject {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -5621,9 +6051,25 @@ All sub-resources including cloud assets other than currently launched target ma
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -5826,9 +6272,25 @@ Function New-CECloudCredential {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -6064,9 +6526,25 @@ Function Set-CECloudCredential {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -6230,9 +6708,25 @@ Function Get-CECloudCredential {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -6392,9 +6886,25 @@ Function Get-CECloud {
 							$Reason = $Result.StatusDescription
 						}
 						catch [System.Net.WebException] {
-							[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-							$StatusCode = [System.Int32]$Response.StatusCode
-							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
 						}
 						catch [Exception]  {
 							$Reason = $_.Exception.Message
@@ -6461,9 +6971,25 @@ Function Get-CECloud {
 						$Reason = $Result.StatusDescription
 					}
 					catch [System.Net.WebException] {
-						[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-						$StatusCode = [System.Int32]$Response.StatusCode
-						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
 					}
 					catch [Exception]  {
 						$Reason = $_.Exception.Message
@@ -6723,9 +7249,25 @@ Function Get-CECloudRegion {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -7136,9 +7678,25 @@ Function Get-CEMachine {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -7249,8 +7807,17 @@ Function Set-CEMachine {
 			  "isAgentInstalled": true
 			}
 
+		.PARAMETER LastTestLaunchDateTime
+			The new last test launch datetime.
+
+		.PARAMETER LastCutoverDateTime
+			The new last cutover datetime.
+
+		.PARAMETER LastRecoveryLaunchDateTime
+			The new last recovery launch datetime.	
+
 		.EXAMPLE
-			Set-CEMachine -InstanceId
+			Set-CEMachine -InstanceId 114b110e-12a3-48d4-b731-90ab3fccdf22 -LastTestLaunchDateTime (Get-Date)
 
 		.INPUTS
 			System.Guid
@@ -7326,7 +7893,7 @@ Function Set-CEMachine {
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/9/2017
+			LAST UPDATE: 12/11/2017
 			
 	#>
 	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
@@ -7337,6 +7904,18 @@ Function Set-CEMachine {
 
 		[Parameter(Mandatory = $true, ParameterSetName = "Config")]
 		[System.Collections.Hashtable]$Config = @{},
+
+		[Parameter(ParameterSetName = "Property")]
+		[ValidateNotNull()]
+		[System.DateTime]$LastTestLaunchDateTime,
+
+		[Parameter(ParameterSetName = "Property")]
+		[ValidateNotNull()]
+		[System.DateTime]$LastCutoverDateTime,
+
+		[Parameter(ParameterSetName = "Property")]
+		[ValidateNotNull()]
+		[System.DateTime]$LastRecoveryLaunchDateTime,
 
 		[Parameter()]
 		[Switch]$PassThru,
@@ -7375,9 +7954,9 @@ Function Set-CEMachine {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14) 
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3) 
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -7406,7 +7985,7 @@ Function Set-CEMachine {
                     }
                 }
 
-				$Config = @{}
+				$Config = @{"lifeCycle" = @{}}
 
 				# Get the parameters for the command
 				foreach ($Item in $Params.GetEnumerator())
@@ -7418,7 +7997,8 @@ Function Set-CEMachine {
 						if ($PSBoundParameters.ContainsKey($Item.Key))
 						{
 							# If it was, add it to the config object
-							$Config.Add($Item.Key, $PSBoundParameters[$Item.Key])
+							[System.DateTime]$Time = ([System.DateTime]$PSBoundParameters[$Item.Key])
+							$Config["lifeCycle"].Add($Item.Key, $Time.ToString("yyyy-MM-ddTHH:mm:ssZ"))
 						}
 					}
 				}
@@ -7445,9 +8025,25 @@ Function Set-CEMachine {
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -7583,9 +8179,25 @@ This will cause data replication to stop and the instance$(if ($Ids.Length -gt 1
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -7712,9 +8324,25 @@ Function Get-CEMachineReplica {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -7816,9 +8444,9 @@ Function New-CEInstallationToken {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 12)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 2)
 			{
-				throw "This cmdlet is only supported in v12 and under. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v2 and under. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -7837,9 +8465,25 @@ Function New-CEInstallationToken {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -7922,9 +8566,9 @@ Function Get-CEInstallationToken {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 12)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 2)
 			{
-				throw "This cmdlet is only supported in v12 and under. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v2 and under. Your account is using v$($SessionInfo.Version)."
 			}
 
 			[System.String]$Uri = "$($SessionInfo.Url)/me"
@@ -7938,9 +8582,25 @@ Function Get-CEInstallationToken {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -8163,9 +8823,25 @@ If you continue, you will begin to incur additional costs from $Target for data 
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -8398,9 +9074,25 @@ $(if ($Ids.Length -gt 1) { "These instances" } else { "This instance" }) will st
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -8598,9 +9290,9 @@ Function Suspend-CEDataReplication {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -8636,9 +9328,25 @@ $(if ($Ids.Length -gt 1) { "These instances" } else { "This instance" }) will st
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -8800,9 +9508,9 @@ Function Invoke-CEMachineFailover {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 12)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 2)
 			{
-				throw "This cmdlet is only supported in v12 and under. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v2 and under. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -8892,9 +9600,25 @@ Are you sure you want to perform a failover?
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -9024,9 +9748,9 @@ Function Invoke-CEMachineTest {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 12)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 2)
 			{
-				throw "This cmdlet is only supported in v12 and under. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v2 and under. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -9106,9 +9830,25 @@ Any previously launched versions of these instances (including any associated cl
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -9224,9 +9964,9 @@ Function Invoke-CEMachineCutover {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 12)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -gt 2)
 			{
-				throw "This cmdlet is only supported in v12 and under. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v2 and under. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -9267,9 +10007,25 @@ Any previously launched versions of these instances (including any associated cl
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -9404,9 +10160,25 @@ Function Get-CEJobs {
 				$Reason = $Result.StatusDescription
 			}
 			catch [System.Net.WebException] {
-				[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
 			}
 			catch [Exception]  {
 				$Reason = $_.Exception.Message
@@ -9557,9 +10329,25 @@ This cleanup will remove the specified target machines from the cloud.
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -9674,9 +10462,9 @@ Function Invoke-CEReverseReplication {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -9703,9 +10491,25 @@ This will reverse the direction of replication for the project $ProjectId.
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -9852,9 +10656,9 @@ Function Invoke-CELaunchTargetMachine {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -9900,9 +10704,25 @@ Any previously launched versions of these instances (including any associated cl
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -10023,9 +10843,9 @@ Function Move-CEMachine {
 
 		if ($SessionInfo -ne $null) 
 		{
-			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 14)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				throw "This cmdlet is only supported in v14 and later. Your account is using v$($SessionInfo.Version)."
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
 			}
 
 			if ($ProjectId -eq [System.Guid]::Empty)
@@ -10057,9 +10877,25 @@ This will move $($Ids.Length) instance$(if ($Ids.Length -gt 1) { "s" }) from pro
 					$Reason = $Result.StatusDescription
 				}
 				catch [System.Net.WebException] {
-					[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-					$StatusCode = [System.Int32]$Response.StatusCode
-					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
 				}
 				catch [Exception]  {
 					$Reason = $_.Exception.Message
@@ -10180,9 +11016,25 @@ Function Get-CEWindowsInstaller {
 			$Reason = $Result.StatusDescription
 		}
 		catch [System.Net.WebException] {
-			[System.Net.HttpWebResponse]$Response = $_.Exception.Response
-			$StatusCode = [System.Int32]$Response.StatusCode
-			$Reason = "$($Response.StatusDescription) $($_.Exception.Message)"
+			[System.Net.WebException]$Ex = $_.Exception
+
+			if ($Ex.Response -eq $null)
+			{
+				$Reason = "$($Ex.Status): $($Ex.Message)"
+				$StatusCode = 500
+			}
+			else
+			{
+				[System.Net.HttpWebResponse]$Response = $Ex.Response
+				$StatusCode = [System.Int32]$Response.StatusCode
+			
+				[System.IO.Stream]$Stream = $Response.GetResponseStream()
+				[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+				[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+				$Content = $Reader.ReadToEnd()
+
+				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+			}
 		}
 		catch [Exception]  {
 			$Reason = $_.Exception.Message

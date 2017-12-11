@@ -1,11 +1,16 @@
 # CloudEndure
 
 ## Information
-The cmdlets have been tested against v12 of the CloudEndure API. Currently, the "latest" version redirects to v12 in the CE console, although there are newer versions documented. The module has been updated to include cmdlets in the v15 API.
+The cmdlets have been tested against v12 of the CloudEndure API. The "latest" version depends on your CE account. The formerly labeled v14/v15 API has now been renamed to v3 and the v12 API version has been renamed to v2, thus these cmdlets are tested against v2.
+
+The new APIs are not backwards compatible with the old APIs, so you need to be know which versions or options of the cmdlets you should use since this module supports both v2 and v3 in the same module. It will provide an error if you try using a cmdlet against
+an API that is not supported for the version associated with your CE account.
 
 ## Usage
 
-Import-Module CloudEndure
+**Import the module**
+
+    Import-Module CloudEndure
 
 **Creates a new CloudEndure credential profile to use.**
 
@@ -51,6 +56,11 @@ The commands will get all of the blueprints in both accounts.**
     Remove-CESession
 
 ## Revision History
+
+### 1.2.0.3
+Updated the Set-CEMachine cmdlet to comply with the launch time updates restriction. Converted the new version, v3, from the old names for that version, v14/v15 and translated the old version v12 to v2.
+
+Added XSRF token support for v3 and later.
 
 ### 1.2.0.2
 Fixed Remove-CEProfile.
