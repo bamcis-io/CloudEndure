@@ -57,6 +57,13 @@ The commands will get all of the blueprints in both accounts.**
 
 ## Revision History
 
+### 1.2.1.0
+Updated Get-CEWindowsInstaller so that the web response is returned to the pipeline.
+
+Updated Start-CEDataReplication verbose message content.
+		
+Fixed Remove-CESession when a specific Session Id is provided so that the logout works.
+
 ### 1.2.0.3
 Updated the Set-CEMachine cmdlet to comply with the launch time updates restriction. Converted the new version, v3, from the old names for that version, v14/v15 and translated the old version v12 to v2.
 
