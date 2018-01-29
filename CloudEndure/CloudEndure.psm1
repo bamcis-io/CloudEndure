@@ -27,6 +27,7 @@ $script:ProfileLocation = "$env:USERPROFILE\.cloudendure\credentials"
 	"Azure" = "00000000-0000-0000-0000-000000000000"
 }
 
+# This is hashtable of hashtables
 [System.Collections.Hashtable]$script:Sessions = @{}
 
 [System.String[]]$script:CommonParams = [System.Management.Automation.PSCmdlet]::CommonParameters + [System.Management.Automation.PSCmdlet]::OptionalCommonParameters + @("PassThru", "Force", "Session", "ProjectId")
@@ -678,7 +679,8 @@ Function Remove-CESession {
 			foreach ($SessionInfo in $script:Sessions.GetEnumerator())
 			{
 				Write-Verbose -Message "Terminating session for $($SessionInfo.Key)"
-				$Uri = "$SessionInfo.Value.Url/logout"
+
+				$Uri = "$($SessionInfo.Value.Url)/logout"
 
 				$StatusCode = 0
 				$Reason = ""
@@ -725,7 +727,7 @@ Function Remove-CESession {
         }
         else 
         {
-			$SessionInfo = Get-CESession -Session $Session
+			[System.Collections.Hashtable]$SessionInfo = Get-CESession -Session $Session
 			$Uri = "$($SessionInfo.Url)/logout"
 
 			$StatusCode = 0
@@ -7201,7 +7203,15 @@ Function Get-CECloudRegion {
 				}
 				"GetSource" {
 					$Project = Get-CEProject -Id $ProjectId -Session $Session
-					$Id = $Project.Source
+					
+					if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
+					{
+						$Id = $Project.Source
+					}
+					else
+					{
+						$Id = $Project.sourceRegion
+					}
 
 					if ($Id -ne $script:CloudIds["Generic"])
 					{
@@ -8853,7 +8863,7 @@ If you continue, you will begin to incur additional costs from $Target for data 
 
 					if ($Temp.Items -ne $null -and $Temp.Items.Length -gt 0)
 					{
-						Write-Verbose -Message "Replication successfully stopped for machine(s) $([System.String]::Join(",", $($Result | Select-Object -ExpandProperty Items | Select-Object -ExpandProperty Id)))."
+						Write-Verbose -Message "Replication successfully stopped for machine(s) $([System.String]::Join(",", $($Temp | Select-Object -ExpandProperty Items | Select-Object -ExpandProperty Id)))."
 
 						if ($PassThru)
 						{
@@ -11011,7 +11021,9 @@ Function Get-CEWindowsInstaller {
 
 		try {
 			# Now we know the folder for the destination exists and the destination path includes a file name
-			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $script:Installer -OutFile $Destination -ErrorAction Stop
+			# OutFile writes the file to the provided path
+			# PassThru is only an option with OutFile and returns the result to the pipeline
+			[Microsoft.PowerShell.Commands.WebResponseObject]$Result = Invoke-WebRequest -Uri $script:Installer -OutFile $Destination -PassThru -ErrorAction Stop
 			$StatusCode = $Result.StatusCode
 			$Reason = $Result.StatusDescription
 		}
