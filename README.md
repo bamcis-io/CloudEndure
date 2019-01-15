@@ -1,10 +1,11 @@
 # CloudEndure
 
+I developed this module when working at a former job when we were using CloudEndure a lot to do migrations for a customer. That was in 2016/2017. I haven't maintained this module since then, except for minor bug fixes and updates that have been asked for. The CE APIs have been continually updated and have introduced a number of breaking changes. I no longer have access to a CE account, so I don't have a way to test the changes I make either. At some point I may refactor the whole module to standardize on the latest release of CE and remove the backwards compatibility. Who knows. If you're interested in the module, or use it and want to see development/updates continue, let me know.
+
 ## Information
 The cmdlets have been tested against v12 of the CloudEndure API. The "latest" version depends on your CE account. The formerly labeled v14/v15 API has now been renamed to v3 and the v12 API version has been renamed to v2, thus these cmdlets are tested against v2.
 
-The new APIs are not backwards compatible with the old APIs, so you need to be know which versions or options of the cmdlets you should use since this module supports both v2 and v3 in the same module. It will provide an error if you try using a cmdlet against
-an API that is not supported for the version associated with your CE account.
+The new APIs are not backwards compatible with the old APIs, so you need to be know which versions or options of the cmdlets you should use since this module supports both v2 and v3 in the same module. It will provide an error if you try using a cmdlet against an API that is not supported for the version associated with your CE account.
 
 ## Usage
 
