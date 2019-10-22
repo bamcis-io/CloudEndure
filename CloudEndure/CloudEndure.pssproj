@@ -29,6 +29,7 @@
     <Compile Include="CloudEndure.psd1" />
     <Compile Include="CloudEndure.psm1" />
     <Compile Include="CloudEndure.tests.ps1" />
+    <Compile Include="CloudEndureSource.psm1" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <Import Project="$(MSBuildExtensionsPath)\PowerShell Tools for Visual Studio\PowerShellTools.targets" Condition="Exists('$(MSBuildExtensionsPath)\PowerShell Tools for Visual Studio\PowerShellTools.targets')" />

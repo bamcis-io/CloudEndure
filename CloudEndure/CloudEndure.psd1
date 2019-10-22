@@ -12,7 +12,7 @@
 RootModule = 'CloudEndure.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.2.1.1'
+ModuleVersion = '2.0.0'
 
 # Supported PSEditions
 # CompatiblePSEditions = @()
@@ -71,7 +71,7 @@ RequiredModules = @("BAMCIS.Common", "BAMCIS.DynamicParam")
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = @(
 	# Profiles & Sessions
-	"New-CEProfile", "Get-CEProfile", "Remove-CEProfile", "New-CESession", "Get-CESession", "Remove-CESession",
+	"New-CEProfile", "Get-CEProfile", "Update-CEProfile", "Remove-CEProfile", "New-CESession", "Get-CESession", "Remove-CESession",
 	
 	# Blueprints
 	"New-CEBlueprint", "Get-CEBlueprint", "Set-CEBlueprint",
@@ -96,7 +96,7 @@ FunctionsToExport = @(
 	"New-CECloudCredential", "Get-CECloudCredential", "Set-CECloudCredential",
 
 	# Cloud
-	"Get-CECloud", "Get-CECloudRegion", "Get-CETargetCloud", "Get-CESourceCloud",
+	"Get-CECloud", "Get-CECloudRegion", "Get-CETargetCloudRegion", "Get-CESourceCloudRegion",
 	 
 	# Machines
 	"Get-CEMachine", "Remove-CEMachine", "Get-CEMachineReplica", "Set-CEMachine",

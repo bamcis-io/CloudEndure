@@ -1,10 +1,9 @@
 $script:URL = "https://console.cloudendure.com/api"
 $script:Installer = "https://console.cloudendure.com/installer_win.exe"
 $script:ProfileLocation = "$env:USERPROFILE\.cloudendure\credentials"
-
 [System.Collections.Hashtable]$script:AWSRegionMap = @{
 	"Generic" = "f54420d5-3de4-40bb-b35b-33d32ad8c8ef";
-	"AWS US East (Northern Virginia)" = "71fbc661-a3a8-4315-bcf9-3db3353a6ef8";
+	"AWS US East (Northern Virginia)" = "47d842b8-ebfa-4695-90f8-fb9ab686c708";
 	"AWS US West (Northern California)" = "959d856b-3730-48c2-84ba-a509497b2085";
 	"AWS US West (Oregon)" = "31cc9e94-58af-4920-9cd7-db6a45f28fd4";
 	"AWS EU (Ireland)" = "114b110d-00ad-48d4-a930-90cb3f8cde2e";
@@ -21,21 +20,11 @@ $script:ProfileLocation = "$env:USERPROFILE\.cloudendure\credentials"
 }
 
 [System.Collections.Hashtable]$script:CloudIds = @{
-	"AWS" = "6849e59c-29f5-4e10-a459-9d8584c7524b";
-	"GENERIC" = "4e665c91-6dbc-4802-9832-85990d048852";
-	"VCENTER" = "df35a75f-3b21-4161-aae0-4942d6e3b5f4";
+	"AWS" = "4c7b3582-9e73-4866-858a-8e1ac6e818b3";
+	"Generic" = "f54420d5-3de4-40bb-b35b-33d32ad8c8ef";
 	"On-Premises" = "00000000-0000-0000-0000-000000000000";
 	"GCP" = "00000000-0000-0000-0000-000000000000";
 	"Azure" = "00000000-0000-0000-0000-000000000000"
-}
-
-[System.Collections.Hashtable]$script:IdToCloudMap = @{
-	"6849e59c-29f5-4e10-a459-9d8584c7524b" = "AWS";
-	"4e665c91-6dbc-4802-9832-85990d048852" = "GENERIC";
-	"df35a75f-3b21-4161-aae0-4942d6e3b5f4" = "VCENTER";
-	"00000000-0000-0000-0000-000000000000" = "On-Premises";
-	"GCP" = "00000000-0000-0000-0000-000000000001";
-	"Azure" = "00000000-0000-0000-0000-000000000002"
 }
 
 # This is hashtable of hashtables
@@ -44,436 +33,7 @@ $script:ProfileLocation = "$env:USERPROFILE\.cloudendure\credentials"
 [System.String[]]$script:CommonParams = [System.Management.Automation.PSCmdlet]::CommonParameters + [System.Management.Automation.PSCmdlet]::OptionalCommonParameters + @("PassThru", "Force", "Session", "ProjectId")
 [System.String]$script:AllParameterSets = "__AllParameterSets"
 
-#region Private Functions
-
-Function Get-CESessionOrDefault {
-	[CmdletBinding()]
-	Param(
-		[Parameter(Position = 0)]
-		[System.String]$Session
-	)
-
-	Begin {
-
-	}
-
-	Process {
-		$SessionInfo = $null
-
-        if (-not [System.String]::IsNullOrEmpty($Session)) {
-            $SessionInfo = $script:Sessions.Get_Item($Session)
-        }
-        else {
-            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
-			$Session = $SessionInfo.User.Username
-        }
-
-		if ($SessionInfo -eq $null) 
-		{
-			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
-		}
-
-		Write-Output -InputObject $SessionInfo
-	}
-
-	End {
-
-	}
-}
-
-Function Invoke-CERequest {
-	[CmdletBinding()]
-	Param(
-		[Parameter(ParameterSetName = "Path")]
-		[ValidatePattern("^/.*$")]
-		[System.String]$Path,
-
-		[Parameter(ParameterSetName = "Uri")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Uri,
-
-		[Parameter(Mandatory = $true)]
-		[Microsoft.PowerShell.Commands.WebRequestMethod]$Method,
-
-		[Parameter()]
-		[System.String]$Session,
-
-		[Parameter()]
-		[ValidateRange(100, 599)]
-		[System.Int32]$ExpectedResponseCode = 200,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Body = [System.String]::Empty,
-
-		[Parameter()]
-		[ScriptBlock]$ErrorHandling = $null,
-
-		[Parameter()]
-		[System.Object[]]$ErrorHandlingArgs = @()
-	)
-
-	Begin {
-	}
-
-	Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
-
-		[System.Int32]$StatusCode = 0
-		$Reason = ""
-		$Splat = @{}
-
-		if (-not [System.String]::IsNullOrEmpty($Body))
-		{
-			$Splat.Add("Body", $Body)
-		}
-
-		switch ($PSCmdlet.ParameterSetName)
-		{
-			"Path" {
-				$Splat.Add("Path", $Path)
-				break
-			}
-			"Uri" {
-				$Splat.Add("Uri", $Uri)
-				break
-			}
-		}
-
-		# If a response generates a 300+ http response 
-		# it will set the error message
-		# Hashtable has WebResponse, StatusCode, and ErrorMessage properties
-		[System.Collections.Hashtable]$Result = Invoke-WebRequestWithBasicErrorHandling -Method $Method -Session $Session @Splat
-
-		if ($ErrorHandling -eq $null)
-		{
-			if ($Result["StatusCode"] -eq $ExpectedResponseCode)
-			{
-				Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result["WebResponse"].Content))
-			}
-			else
-			{
-				throw $Result["ErrorMessage"]
-			}
-		}
-		else
-		{
-			& $ErrorHandling $Result["StatusCode"] $Result["WebResponse"].Content $Result["ErrorMessage"] $ErrorHandlingArgs
-		}
-	}
-
-	End {
-	}
-}
-
-Function Invoke-WebRequestWithBasicErrorHandling {
-	[CmdletBinding(DefaultParameterSetName = "Path")]
-	Param(
-		[Parameter(ParameterSetName = "Path", Mandatory = $true)]
-		[ValidatePattern("^/.*$")]
-		[System.String]$Path,
-
-		[Parameter(ParameterSetName = "Uri", Mandatory = $true)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Uri,
-
-		[Parameter(Mandatory = $true)]
-		[Microsoft.PowerShell.Commands.WebRequestMethod]$Method,
-
-		[Parameter()]
-		[System.String]$Session,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Body = [System.String]::Empty,
-
-		[Parameter(ParameterSetName = "Uri")]
-		[Switch]$Login
-	)
-
-	Begin {
-
-		# No existing session info for a new session
-		if (-not $Login)
-		{
-			$SessionInfo = Get-CESessionOrDefault -Session $Session
-		}
-
-		[System.Int32]$StatusCode = 0
-		$Reason = ""
-		$Splat = @{}
-
-		if (-not [System.String]::IsNullOrEmpty($Body))
-		{
-			$Splat.Add("Body", $Body)
-			$Splat.Add("ContentType", "application/json")
-		}
-
-		switch ($PSCmdlet.ParameterSetName)
-		{
-			"Path" {
-				$Splat.Add("Uri", "$($SessionInfo.Url)$Path")
-				break
-			}
-			"Uri" {
-				$Splat.Add("Uri", $Uri)
-				break
-			}
-		}
-
-		if ($Login)
-		{
-			$Splat.Add("SessionVariable", "WebSession")
-		}
-
-		try {
-			[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-			[Microsoft.PowerShell.Commands.WebResponseObject]$Result = Invoke-WebRequest -Method $Method -WebSession $SessionInfo.WebSession -UseBasicParsing -ErrorAction Stop @Splat
-			$StatusCode = $Result.StatusCode
-			$Reason = $Result.StatusDescription
-			Write-Verbose -Message $Result.Content
-		}
-		catch [System.Net.WebException] {
-			[System.Net.WebException]$Ex = $_.Exception
-
-			if ($Ex.Response -eq $null)
-			{
-				$Reason = "$($Ex.Status): $($Ex.Message)"
-				$StatusCode = 500
-			}
-			else
-			{
-				[System.Net.HttpWebResponse]$Response = $Ex.Response
-				$StatusCode = [System.Int32]$Response.StatusCode
-			
-				[System.IO.Stream]$Stream = $Response.GetResponseStream()
-				[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
-				[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
-				$Content = $Reader.ReadToEnd()
-
-				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
-			}
-		}
-		catch [Exception]  {
-			$Reason = $_.Exception.Message
-		}
-
-		$ErrorMessage = ""
-
-		if ($StatusCode -ge 300)
-		{
-			$ErrorMessage = "$StatusCode : $Reason$(if (-not [System.String]::IsNullOrEmpty($Result.Content)) {"`n$($Result.Content)"})"
-		}
-
-		$ReturnData = @{"WebResponse" = $Result;
-			"StatusCode" = $StatusCode;
-			"ErrorMessage" = $ErrorMessage
-		}
-
-		if ($Login)
-		{
-			$ReturnData.Add("SessionVariable", $WebSession)
-		}
-
-		Write-Output -InputObject $ReturnData
-	}
-}
-
-Function Convert-ParametersToHashtable {
-	[CmdletBinding()]
-	Param(
-		[Parameter(Mandatory = $true)]
-        [ValidateNotNull()]
-		[System.Collections.Generic.Dictionary[System.String, System.Management.Automation.ParameterMetadata]]$Parameters,
-
-		[Parameter()]
-        [ValidateNotNullOrEmpty()]
-		[System.String]$ParameterSetName = $script:AllParameterSets,
-
-		[Parameter()]
-        [ValidateNotNull()]
-		[System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary,
-
-		[Parameter(Mandatory = $true)]
-        [ValidateNotNull()]
-		[System.Collections.Generic.Dictionary[System.String, System.Object]]$BoundParameters,
-
-		[Parameter()]
-		[Switch]$IncludeAll,
-
-		[Parameter(ParameterSetName = "Defaults")]
-		[Switch]$IncludeDefaults,
-
-		[Parameter(ParameterSetName = "Defaults", Mandatory = $true)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$FunctionName
-	)
-
-	Begin {
-	}
-
-	Process {
-		$Params = @{}
-		$Output = @{}
-
-		foreach ($Item in $Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
-        {
-			[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
-            $Params.Add($Item.Key, $Sets)
-        }
-
-        if ($RuntimeParameterDictionary -ne $null)
-        {
-		    # Get the dynamic parameters, iterate on each
-            $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
-            
-			    # Get the parameter
-			    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
-
-			    # If the parameter is set and it hasn't already been added
-                if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
-                {
-				    # Get the parameter name and its parameter sets
-				    [System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
-                    $Params.Add($Param.Name, $ParameterSets)
-                }
-            }
-        }
-
-		# Get the parameters for the command
-		foreach ($Item in $Params.GetEnumerator())
-		{
-			# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
-			if ($Item.Value.Contains($ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
-			{
-				$Add = $false
-				$Value = $null
-
-				# Check to see if it was supplied by the user
-				if ($BoundParameters.ContainsKey($Item.Key))
-				{
-					$Add = $true
-					$Value = $BoundParameters[$Item.Key]
-				}				
-				else
-				{
-					# If not supplied, and we're including defaults, see if it has a default value
-					if ($IncludeDefaults)
-					{
-						if (Test-ParameterHasDefaultValue -FunctionName $FunctionName -Parameter $Item.Key)
-						{
-							$Add = $true
-							$Value = Get-ParameterDefaultValue -FunctionName $FunctionName -Parameter $Item.Key
-						}
-					}
-					elseif ($IncludeAll)
-					{
-						# Check this since it may have been added with a default value already
-						if ($Add -eq $false)
-						{
-							$Name = $Parameters[$Item.Key].ParameterType.FullName
-							$Add = $true
-							Set-Variable $Value -Scope 1 -Value (([System.Object]$V) -as ($Name -as [Type]))
-						}
-					}
-				}
-
-				if ($Add)
-				{
-					$Output.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $Value)
-				}
-			}
-		}
-
-		Write-Output -InputObject $Output
-	}
-
-	End {
-	}
-}
-
-Function Get-ParameterDefaultValue {
-	<#
-
-	#>
-	[CmdletBinding()]
-	Param
-	(
-		[Parameter(Mandatory = $true, Position = 0)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$FunctionName,
-		
-		[Parameter(Mandatory = $true, Position = 1)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Parameter
-	)
-
-    Begin {
-    }
-
-    Process {
-        if (-not (Test-ParameterHasDefaultValue -FunctionName $FunctionName -Parameter $Parameter))
-        {
-            throw "The parameter $Parameter in $FunctionName does not have a default value."
-        }
-	
-		$Ast = (Get-Command $FunctionName).ScriptBlock.Ast
-		
-		$Select = @{ n = "Name"; e = { $_.Name.VariablePath.UserPath } },
-		@{ n = "Value"; e = { $_.DefaultValue.Extent.Text -replace "`"|'" } }
-		
-        $Result = $Ast.FindAll({ $args[0] -is [System.Management.Automation.Language.ParameterAst] }, $true) | 
-            Select-Object $Select | 
-            Where-Object {$_.Name -ieq $Parameter } | 
-            Select-Object -ExpandProperty Value
-       
-		Write-Output -InputObject (Invoke-Expression $Result)
-    }
-
-    End {
-    }
-}
-
-Function Test-ParameterHasDefaultValue {
-	<#
-
-	#>
-	[CmdletBinding()]
-	Param
-	(
-		[Parameter(Mandatory = $true, Position = 0)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$FunctionName,
-		
-		[Parameter(Mandatory = $true, Position = 1)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Parameter
-	)
-	Begin {
-    }
-
-    Process {
-		$Ast = (Get-Command $FunctionName).ScriptBlock.Ast
-		
-		$Select = @{ n = "Name"; e = { $_.Name.VariablePath.UserPath } },
-		@{ n = "Value"; e = { $_.DefaultValue.Extent.Text -replace "`"|'" } }
-		
-        $Result = $Ast.FindAll({ $args[0] -is [System.Management.Automation.Language.ParameterAst] }, $true) | 
-            Where-Object { $_.DefaultValue } |
-            Select-Object $Select | 
-            Where-Object { $_.Name -ieq $Parameter } 
-
-		Write-Output -InputObject ($Result -ne $null)
-		
-	}
-	
-    End {
-	}
-}
-
-#endregion
-
-#region Profiles 
+#region Profiles & Sessions
 
 Function New-CEProfile {
 	<#
@@ -506,28 +66,21 @@ Function New-CEProfile {
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/11/2019
+			LAST UPDATE: 8/24/2017
 	#>
-	# Default to ApiToken so when someone specifies the ApiToken parameter
-	# it won't be confused on whether or not credential is required as well
-	[CmdletBinding(DefaultParameterSetName = "ApiToken")]
+	[CmdletBinding()]
 	[OutputType()]
 	Param(
-		[Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = "Creds")]
+		[Parameter(Mandatory = $true, Position = 0, ValueFromPipeline = $true)]
 		[ValidateNotNull()]
 		[System.Management.Automation.Credential()]
-		[System.Management.Automation.PSCredential]$Credential = [PSCredential]::Empty,
+		[System.Management.Automation.PSCredential]$Credential,
 
-		[Parameter(Mandatory = $true, ParameterSetName = "ApiToken")]
-		[Parameter(ParameterSetName = "Creds")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ApiToken = [System.String]::Empty,
-
-		[Parameter(Mandatory = $true)]
+		[Parameter(Mandatory = $true, Position = 1)]
 		[ValidateNotNullOrEmpty()]
 		[System.String]$ProfileName,
 
-		[Parameter()]
+		[Parameter(Position = 2)]
 		[ValidateNotNullOrEmpty()]
 		[System.String]$ProfileLocation = [System.String]::Empty
 	)
@@ -549,28 +102,9 @@ Function New-CEProfile {
 			New-Item -Path $ProfileLocation -ItemType File -Force
 		}
 		
-		switch ($PSCmdlet.ParameterSetName)
-		{
-			"Creds" {
-				$CEProfile = @{"username" = $Credential.UserName; 
-					"password" = ConvertFrom-SecureString -SecureString $Credential.Password; 
-					"apitoken" = $ApiToken.Replace("-", "")}
-
-				break
-			}
-			"ApiToken" {
-				$CEProfile = @{"username" = ""; 
-					"password" = ""; 
-					"apitoken" = $ApiToken.Replace("-", "")}
-				break
-			}
-			default {
-				throw "$($PSCmdlet.ParameterSetName) is not a recognized parameter set."
-			}
-		}
-
 		# This will store the password encrypted with the Windows DPAPI using the user's credentials
-		
+		$Profile = @{"username" = $Credential.UserName; "password" = ConvertFrom-SecureString -SecureString $Credential.Password}
+
 		$Content = Get-Content -Path $ProfileLocation -Raw
 
 		if ($Content -ne $null -and -not [System.String]::IsNullOrEmpty($Content))
@@ -585,11 +119,11 @@ Function New-CEProfile {
 		if ((Get-Member -InputObject $Json -Name $ProfileName -MemberType Properties) -ne $null) 
 		{
 			Write-Warning -Message "The profile $ProfileName is being overwritten with new data."
-			$Json.$ProfileName =  $CEProfile
+			$Json.$ProfileName =  $Profile
 		}
 		else 
 		{
-			$Json | Add-Member -MemberType NoteProperty -Name $ProfileName -Value $CEProfile
+			$Json | Add-Member -MemberType NoteProperty -Name $ProfileName -Value $Profile
 		}
 
 		Set-Content -Path $ProfileLocation -Value (ConvertTo-Json -InputObject $Json)
@@ -628,21 +162,16 @@ Function Get-CEProfile {
 			System.String
 
 		.OUTPUTS
-			System.String[] or PSCustomObject
+			System.String[] or System.Management.Automation.PSCredential
 
-			If no profile is specified, an array of profile names is returned. If the profile name is specified, the a PSCustomObject with a PSCredential and API Token string are retured.
-
-			{
-				"credential" : PSCredential,
-				"apitoken" : "tokenstring"
-			}
+			If no profile is specified, an array of profile names is returned. If the profile name is specified, the PSCredential object is returned.
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/11/2019
+			LAST UPDATE: 8/24/2017
 	#>
 	[CmdletBinding()]
-	[OutputType([PSCustomObject], [System.String[]])]
+	[OutputType([System.Management.Automation.PSCredential], [System.String[]])]
 	Param(
 		[Parameter(Position = 0, ValueFromPipeline = $true)]
 		[ValidateNotNullOrEmpty()]
@@ -662,191 +191,43 @@ Function Get-CEProfile {
 			$ProfileLocation = $script:ProfileLocation
 		}
 
-		if (-not (Test-Path -Path $ProfileLocation -PathType Leaf))
+		if (Test-Path -Path $ProfileLocation -PathType Leaf)
+		{
+			$Content = Get-Content -Path $ProfileLocation -Raw
+
+			if ($Content -ne $null -and -not [System.String]::IsNullOrEmpty($Content))
+			{
+				[PSCustomObject]$Json = ConvertFrom-Json -InputObject $Content
+			}
+			else
+			{
+				[PSCustomObject]$Json = [PSCustomObject]@{}
+			}
+
+			if (-not [System.String]::IsNullOrEmpty($ProfileName))
+			{
+				$Value = $Json | Get-Member -MemberType Properties -Name $ProfileName
+				
+				if ($Value -ne $null)
+				{
+					# Convert the stored data back to a PSCredential object
+					Write-Output -InputObject (New-Object -TypeName System.Management.Automation.PSCredential($Json.$ProfileName.username, (ConvertTo-SecureString -String $Json.$ProfileName.password)))
+				}
+				else
+				{
+					Write-Warning -Message "No profile matching $ProfileName in $ProfileLocation"
+				}
+			}
+			else 
+			{
+				# This will return all of the "keys" which are the profile names
+				Write-Output -InputObject ($Json | Get-Member -MemberType Properties | Select-Object -ExpandProperty Name)
+			}
+		}
+		else
 		{
 			Write-Warning -Message "No profile data stored at $ProfileLocation"
-			Exit
 		}
-
-		$Content = Get-Content -Path $ProfileLocation -Raw
-
-		if ($Content -ne $null -and -not [System.String]::IsNullOrEmpty($Content))
-		{
-			[PSCustomObject]$Json = ConvertFrom-Json -InputObject $Content
-		}
-		else
-		{
-			[PSCustomObject]$Json = [PSCustomObject]@{}
-		}
-
-		if (-not [System.String]::IsNullOrEmpty($ProfileName))
-		{
-			# This is the profile data including the credential and/or api token
-			if (-not ($Json | Get-Member -MemberType Properties -Name $ProfileName))
-			{
-				throw "A profile with the name $ProfileName could not be found in $ProfileLocation."
-			}
-
-			$Value = $Json.$ProfileName
-
-			if (
-				# If either username or password are missing
-				(
-					(-not ($Value | Get-Member -MemberType Properties -Name username)) -or
-					(-not ($Value | Get-Member -MemberType Properties -Name password))
-				) -and
-				# And api token is missing or empty, throw an exception
-				(
-					(-not ($Value | Get-Member -MemberType Properties -Name apitoken)) -or
-					($Value.apitoken -eq [System.String]::Empty)
-				)
-			)
-			{
-				throw "Profile $ProfileName does not have properly configured credentials.`n$($Value | ConvertTo-Json)"
-			}
-				
-			# Convert the stored data back to a PSCredential object
-			$Creds = New-Object -TypeName System.Management.Automation.PSCredential($Json.$ProfileName.username, (ConvertTo-SecureString -String $Json.$ProfileName.password))
-			[PSCustomObject]$CEProfile = [PSCustomObject]@{"credential" = $Creds; "apitoken" = ""}
-
-			if (-not [System.String]::IsNullOrEmpty($Json.$ProfileName.apitoken))
-			{
-				$CEProfile.apitoken = Convert-SecureStringToString -SecureString (ConvertTo-SecureString -String $Json.$ProfileName.apitoken)
-			}
-
-			Write-Output -InputObject $CEProfile
-		}
-		else 
-		{
-			# This will return all of the "keys" which are the profile names
-			Write-Output -InputObject ($Json | Get-Member -MemberType Properties | Select-Object -ExpandProperty Name)
-		}	
-	}
-
-	End {
-	}
-}
-
-Function Update-CEProfile {
-	<#
-		.SYNOPSIS 
-			Updates an existing CE Profile.
-
-		.DESCRIPTION
-			Updates an existing CE Profile with a new username and password and/or API Token.
-
-		.PARAMETER Credential
-			The credentials to save.
-
-		.PARAMETER ApiToken
-			The API Token to save.
-
-		.PARAMTER ProfileName
-			The name of the profile.
-
-		.PARAMETER ProfileLocation
-			Specify a non-default location to store the profile file. This defaults to $env:USERPROFILE\.cloudendure\credentials
-
-		.EXAMPLE
-			Update-CEProfile -ProfileName MyCEProfile -Credential -Credential (New-Object -TypeName System.Management.Automation.PSCredential("john.smith@contoso.com", (ConvertTo-SecureString -String "MyNEW$ecurEP@$$w0Rd" -AsPlainText -Force))
-
-		.INPUTS
-			None
-				
-		.OUTPUTS
-			None
-
-		.NOTES
-            AUTHOR: Michael Haken
-			LAST UPDATE: 10/11/2019
-	#>
-	[CmdletBinding()]
-	[OutputType()]
-	Param(
-		[Parameter()]
-		[ValidateNotNull()]
-		[System.Management.Automation.Credential()]
-		[System.Management.Automation.PSCredential]$Credential = [PSCredential]::Empty,
-
-		[Parameter()]
-		[ValidateNotNull()]
-		[System.String]$ApiToken,
-
-		[Parameter(Mandatory = $true)]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ProfileName,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ProfileLocation = [System.String]::Empty
-	)
-
-	Begin {
-	}
-
-	Process {
-		if ([System.String]::IsNullOrEmpty($ProfileLocation)) 
-		{
-			$ProfileLocation = $script:ProfileLocation
-		}
-
-		Write-Verbose -Message "Using profile location $ProfileLocation."
-
-		if (-not (Test-Path -Path $ProfileLocation -PathType Leaf))
-		{
-			Write-Warning -Message "Profile data could not be found at $ProfileLocation."
-			Exit
-		}
-
-		$Content = Get-Content -Path $ProfileLocation -Raw
-
-		if ($Content -ne $null -and -not [System.String]::IsNullOrEmpty($Content))
-		{
-			[PSCustomObject]$Json = ConvertFrom-Json -InputObject $Content
-		}
-		else
-		{
-			throw "No profiles found in $ProfileLocation."
-		}
-
-		# This is the profile data including the credential and/or api token
-		if (-not ($Json | Get-Member -MemberType Properties -Name $ProfileName))
-		{
-			throw "A profile with the name $ProfileName could not be found in $ProfileLocation."
-		}
-
-		$Value = $Json.$ProfileName
-
-		if ($Credential -ne [System.Management.Automation.PSCredential]::Empty)
-		{
-			if (-not ($Value | Get-Member -MemberType NoteProperty -Name username))
-			{
-				$Value | Add-Member -Name username -MemberType NoteProperty -Value ""
-			}
-
-			if (-not ($Value | Get-Member -MemberType NoteProperty -Name password))
-			{
-				$Value | Add-Member -Name password -MemberType NoteProperty -Value ""
-			}
-
-			$Value.username = $Credential.UserName
-			$Value.password = ConvertFrom-SecureString -SecureString $Credential.Password
-		}
-
-		if (-not [System.String]::IsNullOrEmpty($ApiToken))
-		{
-			if (-not ($Value | Get-Member -MemberType NoteProperty -Name apitoken))
-			{
-				$Value | Add-Member -Name apitoken -MemberType NoteProperty -Value ""
-			}
-
-			$Value.apitoken = ConvertTo-SecureString -String $ApiToken.Replace("-", "") -AsPlainText -Force | ConvertFrom-SecureString
-		}
-
-		$Json.$ProfileName = $Value
-
-		Set-Content -Path $ProfileLocation -Value (ConvertTo-Json -InputObject $Json)
-		Write-Verbose -Message "Successfully saved credentials."
 	}
 
 	End {
@@ -883,7 +264,7 @@ Function Remove-CEProfile {
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 8/24/2017
 	#>
 	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
 	[OutputType([System.Management.Automation.PSCredential])]
@@ -958,10 +339,6 @@ Function Remove-CEProfile {
 	}
 }
 
-#endregion
-
-#region Sessions
-
 Function New-CESession {
     <#
         .SYNOPSIS
@@ -977,12 +354,6 @@ Function New-CESession {
 
         .PARAMETER Credential
             The credential to use to connect to the CE console.
-
-		.PARAMETER ApiToken
-			The user API Token to use to login.
-
-		.PARAMETER GoogleOAuthCode
-			The Google OAuth code used to login.
 
 		.PARAMETER ProfileName
 			The name of the profile to use.
@@ -1001,38 +372,29 @@ Function New-CESession {
         .OUTPUTS
             None or System.String
 
-			If PassThru is specified the username being used to store the session data is returned.
-
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/6/2017
     #>
-    [CmdletBinding(DefaultParameterSetName = "Profile")]
+    [CmdletBinding()]
     [OutputType([System.String])]
 	Param(
+		[Parameter()]
+		[ValidateNotNullOrEmpty()]
+		[ValidateSet("v12", "latest", "v3", "v2")]
+		[System.String]$Version = "latest",
+
 		[Parameter(Mandatory = $true, ParameterSetName = "Credential")]
 		[ValidateNotNull()]
 		[System.Management.Automation.Credential()]
 		[System.Management.Automation.PSCredential]$Credential = [System.Management.Automation.PSCredential]::Empty,
-
-		[Parameter(Mandatory = $true, ParameterSetName = "ApiToken")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ApiToken,
-
-		[Parameter(Mandatory = $true, ParameterSetName = "GoogleOAuth")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$GoogleOAuthCode,
  
         [Parameter()]
         [Switch]$PassThru
 	)
 
 	DynamicParam {
-		if (
-			($Credential -eq $null -or $Credential -eq [System.Management.Automation.PSCredential]::Empty) -and 
-			[System.String]::IsNullOrEmpty($ApiToken) -and
-			[System.String]::IsNullOrEmpty($GoogleOAuthCode)
-		)
+		if ($Credential -eq $null -or $Credential -eq [System.Management.Automation.PSCredential]::Empty)
 		{
 			$Params = @(
 				@{
@@ -1061,120 +423,76 @@ Function New-CESession {
 	}
 
 	Process {
-		$Body = @{}
-
-		switch ($PSCmdlet.ParameterSetName)
+		if ($PSCmdlet.ParameterSetName -ieq "Profile")
 		{
-			"ApiToken" {
-				$Body.Add("userApiToken", $ApiToken)
-				break
-			}
-			"Profile" {
-				$Splat = @{"ProfileName" = $PSBoundParameters["ProfileName"]}
+			$Splat = @{"ProfileName" = $PSBoundParameters["ProfileName"]}
 
-				if (-not [System.String]::IsNullOrEmpty($PSBoundParameters["ProfileLocation"]))
-				{
-					$Splat.Add("ProfileLocation", $PSBoundParameters["ProfileLocation"])
-				}
-
-				# This will safety check to make sure the profile has
-				# credentials, it will throw an exception if the profile does not
-				$Creds = Get-CEProfile @Splat
-
-				if ($Creds -eq $null)
-				{
-					throw "Could not find a profile named $($PSBoundParameters["ProfileName"])."
-				}
-
-				if (($Creds | Get-Member -MemberType Properties -Name apitoken) -and (-not [System.String]::IsNullOrEmpty($Creds.apitoken)))
-				{
-					$Body.Add("userApiToken", $Creds.apitoken)
-				}
-				else
-				{
-					$Credential = $Creds.credential
-					$Body.Add("username", $Credential.UserName) 
-					$Body.Add("password", (Convert-SecureStringToString -SecureString $Credential.Password))
-				}
-
-				break
+			if (-not [System.String]::IsNullOrEmpty($PSBoundParameters["ProfileLocation"]))
+			{
+				$Splat.Add("ProfileLocation", $PSBoundParameters["ProfileLocation"])
 			}
-			"Credential" {
-				$Body.Add("username", $Credential.UserName) 
-				$Body.Add("password", (Convert-SecureStringToString -SecureString $Credential.Password))
-				break
+
+			$Credential = Get-CEProfile @Splat
+
+			if ($Credential -eq $null -or $Credential -eq [System.Management.Automation.PSCredential]::Empty)
+			{
+				throw "Could not find the specified profile $ProfileName."
 			}
-			"GoogleOAuth" {
-				$Body.Add("googleOauthCode", $GoogleOAuthCode)
-				break
-			}
-			default {
-				throw "Unrecognized parameter set name $($PSCmdlet.ParameterSetName)."
-			}
+		}
+
+		if ($Version -eq "v2")
+		{
+			$Version = "v12"
 		}
 
 		# Always logon to latest
         [System.String]$Uri = "$script:URL/latest/login"
+        [System.String]$Body = ConvertTo-Json -InputObject @{"username" = $Credential.UserName; "password" = (Convert-SecureStringToString -SecureString $Credential.Password) }
+		
+		$StatusCode = 0
+		$Reason = ""
 
-		<#
+		try {
+			[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -ContentType "application/json" -Method Post -Body $Body -SessionVariable "WebSession" -ErrorAction Stop
+			$StatusCode = $Result.StatusCode
+			$Reason = $Result.StatusDescription
+		}
+		catch [System.Net.WebException] {
+			[System.Net.WebException]$Ex = $_.Exception
+
+			if ($Ex.Response -eq $null)
 			{
-				"username": "user@example.com",
-				"loginToken": "string",
-				"userApiToken": "string",
-				"agentInstallationToken": "string",
-				"password": "pa$$word",
-				"accountIdentifier": "string",
-				"googleOauthCode": "string"
+				$Reason = "$($Ex.Status): $($Ex.Message)"
+				$StatusCode = 500
 			}
-		#>
-		[System.Collections.Hashtable]$Data = Invoke-WebRequestWithBasicErrorHandling -Uri $Uri -Method Post -Body (ConvertTo-Json -InputObject $Body) -Login
-		[Microsoft.PowerShell.Commands.WebResponseObject]$Result = $Data["WebResponse"]
+			else
+			{
+				[System.Net.HttpWebResponse]$Response = $Ex.Response
+				$StatusCode = [System.Int32]$Response.StatusCode
+			
+				[System.IO.Stream]$Stream = $Response.GetResponseStream()
+				[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+				[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+				$Content = $Reader.ReadToEnd()
 
-		switch ($Result.StatusCode)
+				$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+			}
+		}
+		catch [Exception]  {
+			$Reason = $_.Exception.Message
+		}
+
+		switch ($StatusCode)
 		{
 			200 {
-				$Version = $Result.Headers["X-CloudEndure-Version"]
-				
 				# Login can return a redirect to a specific API version endpoint, grab this redirected endpoint from the response and save
 				# it to use on all subsequent requests
 				[System.String]$Url = $Result.BaseResponse.ResponseUri.ToString().Substring(0,  $Result.BaseResponse.ResponseUri.ToString().LastIndexOf("/"))
 
-				if ($Url.EndsWith("latest"))
-				{
-					$Url = $Url.Substring(0, $Url.LastIndexOf("/")) + "/$Version"
-				}
+				[Microsoft.PowerShell.Commands.WebRequestSession]$WebSession = $WebSession
 
-				[Microsoft.PowerShell.Commands.WebRequestSession]$WebSession = $Data["SessionVariable"]
-
-				<#
-					{
-						"username": "user@example.com",
-						"status": "PENDING",
-						"account": "string",
-						"roles": [
-							"USER"
-						],
-						"settings": {
-							"sendNotifications": {
-								"projectIDs": [
-											"string"
-								]
-							}
-						},
-						"apiToken": "string",
-						"hasPassword": true,
-						"termsAccepted": true,
-						"id": "string",
-						"selfLink": "string"
-					}
-				#>
-				$LoginResponse = ConvertFrom-Json -InputObject $Result.Content
-
-				# Update Websession variable to persist credentials and headers
-				if ($Credential -ne [System.Management.Automation.PSCredential]::Empty)
-				{
-					$WebSession.Credentials = $Credential
-				}
+				$Temp = ConvertFrom-Json -InputObject $Result.Content
+				$WebSession.Credentials = $Credential
 
 				# Add functionality for new XSRF token included in login for v3, which now must be presented
 				# in the header of each request
@@ -1186,36 +504,56 @@ Function New-CESession {
 					$WebSession.Headers.Add("X-XSRF-TOKEN", $MatchingCookie.Value)
 				}
 
-				#[System.Collections.Hashtable]$Session = @{Session = $WebSession; ProjectId = $Summary.Projects.Items[0].Id; DefaultProject = $Summary.Projects.Items[0]; DefaultCloudCredentials = $Summary.Projects.Items[0].CloudCredentialsIDs[0]; User = $Summary.User; }	
-				[System.Collections.Hashtable]$Session = @{
-					WebSession = $WebSession; 
-					Url = $Url; 
-					DefaultProjectId = "";
-					UserId = "";
-					DefaultCloudCredentialsId = "";
-					User = $LoginResponse; 
-					Version = $Version 
-				}	
+				try {
+					#[System.String]$ExtendedInfoUri = "$script:URL/$($Version.ToLower())/extendedAccountInfo"
+					[System.String]$ProjectsUri = "$Url/projects"
+					[System.String]$CloudCredsUri = "$Url/cloudCredentials"
 
-				if ($script:Sessions.ContainsKey($LoginResponse.Username)) {
-					$script:Sessions.Set_Item($LoginResponse.Username.ToLower(), $Session)
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$ProjectsResponse = Invoke-WebRequest -Uri $ProjectsUri -WebSession $WebSession -Method Get -ErrorAction Stop 
+					[PSCustomObject[]]$Projects = (ConvertFrom-Json -InputObject $ProjectsResponse.Content).Items
+
+					$DefaultProject = $Projects[0]
+
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$CredsResponse = Invoke-WebRequest -Uri $CloudCredsUri -WebSession $WebSession -Method Get -ErrorAction Stop 
+					[PSCustomObject[]]$Creds = (ConvertFrom-Json -InputObject $CredsResponse.Content).Items
+
+					$DefaultCreds = $Creds[0]
+
+					[System.String]$Ver = $Url.Substring($Url.LastIndexOf("/") + 1)
+
+					if ($Ver -match "[vV][0-9]+")
+					{
+						$Ver = $Version.Substring(1);
+						
+						# Update the v12 in the url to comply with the new versioning scheme
+						if ($Ver -eq 12)
+						{
+							$Ver = 2
+						}
+					}
+					else
+					{
+						$Ver = "latest"
+					}
+
+					#[System.Collections.Hashtable]$Session = @{Session = $WebSession; ProjectId = $Summary.Projects.Items[0].Id; DefaultProject = $Summary.Projects.Items[0]; DefaultCloudCredentials = $Summary.Projects.Items[0].CloudCredentialsIDs[0]; User = $Summary.User; }	
+					[System.Collections.Hashtable]$Session = @{Session = $WebSession; Url = $Url; ProjectId = $DefaultProject.Id; DefaultProject = $DefaultProject; DefaultCloudCredentials = $DefaultCreds.Id; User = $Temp; Version = $Ver }	
+
+					if ($script:Sessions.ContainsKey($Temp.Username)) {
+						$script:Sessions.Set_Item($Temp.Username.ToLower(), $Session)
+					}
+					else {
+						$script:Sessions.Add($Temp.Username.ToLower(), $Session)
+					}
+
+					if ($PassThru) {
+						Write-Output -InputObject $Temp.Username.ToLower()
+					}
 				}
-				else {
-					$script:Sessions.Add($LoginResponse.Username.ToLower(), $Session)
+				catch [System.Net.WebException] {
+					throw $_.Exception
 				}
 
-				# Set Project Id Defaults
-				$ExtendedInfo = Get-CEAccountExtendedInfo -Session $LoginResponse.Username.ToLower()
-
-				$Session["DefaultProjectId"] = $ExtendedInfo.projects.items[0].id
-				$Session["UserId"] = $ExtendedInfo.user.id
-				$Session["DefaultCloudCredentialsId"] = $ExtendedInfo.projects.items[0].cloudCredentialsIDs[0]
-				$script:Sessions.Set_Item($LoginResponse.Username.ToLower(), $Session)
-
-				if ($PassThru) {
-					Write-Output -InputObject $LoginResponse.Username.ToLower()
-				}
-	
 				break
 			}
 			401 {
@@ -1228,7 +566,7 @@ Function New-CESession {
 				throw "Authentication failure limit has been reached. The service will become available for additional requests after a timeout."
 			}
 			default {
-				throw "The login failed for an unknown reason: $($Data["ErrorMessage"])"
+				throw "The login failed for an unknown reason: $StatusCode"
 			}
 		}
 	}
@@ -1243,7 +581,7 @@ Function Get-CESession {
             Gets stored CE session information.
 
         .DESCRIPTION
-            The cmdlet retrieves an established CE session by its Id, or lists all active sessions. If a session name is supplied and cannot be found this function returns null.
+            The cmdlet retrieves an established CE session by its Id, or lists all active sessions.
 
         .PARAMETER Session
             Specifies the unique identifier of the session to query. If this parameter is not specified, all stored sessions are returned.
@@ -1261,7 +599,7 @@ Function Get-CESession {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 8/17/2017
     #>
 	[CmdletBinding()]
 	[OutputType([System.Collections.Hashtable])]
@@ -1319,7 +657,7 @@ Function Remove-CESession {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/6/2017
     #>
     [CmdletBinding()]
 	[OutputType()]
@@ -1336,33 +674,67 @@ Function Remove-CESession {
     }
 
     Process {
-		$SessionsToEnd = @()
-
         if ($Session -eq [System.String]::Empty)
         {
 			foreach ($SessionInfo in $script:Sessions.GetEnumerator())
 			{
-				$SessionsToEnd += $SessionInfo.Key
+				Write-Verbose -Message "Terminating session for $($SessionInfo.Key)"
+
+				$Uri = "$($SessionInfo.Value.Url)/logout"
+
+				$StatusCode = 0
+				$Reason = ""
+
+				try {
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Post -WebSession $SessionInfo.Value.Session -ErrorAction Stop
+					$StatusCode = $Result.StatusCode
+					$Reason = $Result.StatusDescription
+				}
+				catch [System.Net.WebException] {
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
+				}
+				catch [Exception]  {
+					$Reason = $_.Exception.Message
+				}
+
+				if ($StatusCode -ne 204)
+				{
+					Write-Warning -Message "Problem terminating session for $($SessionInfo.Key): $StatusCode $Reason - $($Result.Content)"
+				}
 			}
-		}
-		else
-		{
-			$SessionsToEnd += $Session
-		}
 
-		foreach ($SessionToEnd in $SessionsToEnd)
-		{
-			$SessionInfo = $Sessions[$SessionToEnd]
+            $script:Sessions = @{}
 
-			Write-Verbose -Message "Terminating session for $SessionToEnd."
-
+			Write-Verbose -Message "Successfully removed all sessions."
+        }
+        else 
+        {
+			[System.Collections.Hashtable]$SessionInfo = Get-CESession -Session $Session
 			$Uri = "$($SessionInfo.Url)/logout"
 
 			$StatusCode = 0
 			$Reason = ""
 
 			try {
-				[Microsoft.PowerShell.Commands.WebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Post -WebSession $SessionInfo.WebSession -UseBasicParsing -ErrorAction Stop
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Post -WebSession $SessionInfo.Session -ErrorAction Stop		
 				$StatusCode = $Result.StatusCode
 				$Reason = $Result.StatusDescription
 			}
@@ -1391,17 +763,17 @@ Function Remove-CESession {
 				$Reason = $_.Exception.Message
 			}
 
-			$script:Sessions.Remove($SessionToEnd.ToLower())
+			$script:Sessions.Remove($Session.ToLower())
 
 			if ($StatusCode -ne 204)
 			{
-				Write-Warning -Message "Problem terminating session for $SessionToEnd`: $StatusCode $Reason - $($Result.Content)"
+				Write-Warning -Message "Problem terminating session for $Session`: $StatusCode $Reason - $($Result.Content)"
 			}
 			else
 			{
-				Write-Verbose -Message "Successfully removed session $SessionToEnd."
+				Write-Verbose -Message "Successfully removed session $Session."
 			}
-		}
+        }
     }
 
     End {
@@ -1409,7 +781,7 @@ Function Remove-CESession {
 }
 
 #endregion
-	`
+
 #region Blueprints
 
 Function New-CEBlueprint {
@@ -1429,21 +801,6 @@ Function New-CEBlueprint {
 
 			{
 			  "iamRole": "string",
-			  "scsiAdapterType": "string",
-			  "publicIPAction": "ALLOCATE",
-			  "machineName": "string",
-			  "cpus": 0,
-			  "securityGroupIDs": [
-				"string"
-			  ],
-			  "runAfterLaunch": true,
-			  "networkInterface": "string",
-			  "mbRam": 0,
-			  "instanceType": "string",
-			  "subnetIDs": [
-				"string"
-			  ],
-			  "coresPerCpu": 0,
 			  "staticIp": "string",
 			  "tags": [
 				{
@@ -1451,16 +808,17 @@ Function New-CEBlueprint {
 				  "value": "string"
 				}
 			  ],
-			  "securityGroupAction": "FROM_POLICY",
+			  "publicIPAction": "ALLOCATE",
+			  "machineName": "string",
 			  "privateIPs": [
 				"string"
 			  ],
-			  "tenancy": "SHARED",
-			  "computeLocationId": "string",
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
 			  "subnetsHostProject": "string",
-			  "logicalLocationId": "string",
-			  "networkAdapterType": "string",
-			  "byolOnDedicatedInstance": true,
+			  "instanceType": "string",
 			  "placementGroup": "string",
 			  "disks": [
 				{
@@ -1471,83 +829,49 @@ Function New-CEBlueprint {
 			  ],
 			  "privateIPAction": "CREATE_NEW",
 			  "staticIpAction": "EXISTING",
-			  "dedicatedHostIdentifier": "string",
-			  "useSharedRam": true
-			}
-	
-		.PARAMETER Path
-			The path to a file containing the JSON definition of the blueprint.
+			  "subnetIDs": [
+				"string"
+			  ]
+			}		
 
 		.PARAMETER IAMRole
 			AWS only. The AWS IAM Role to associate with this blueprint.
 
-		.PARAMETER ScsiAdapterType
-			VCENTER Only. The scsi adapter type.
-
-		.PARAMETER PublicIPAction
-			Whether to allocate an ephemeral public IP, or not. AS_SUBNET causes CloudEndure to copy this property from the source machine.
-	
-		.PARAMETER MachineName
-			The instance to create this blueprint for.
-
-		.PARAMETER Cpus
-			VCENTER Only. Number of CPUs per target machine.
-
-		.PARAMETER SecurityGroupIds
-			AWS Only. The security groups that will be associated with the instance.
-
-		.PARAMETER RunAfterLaunch
-			AWS Only. Specify true to have the instance started after it is launched or false to leave it in a stopped state.
-
-		.PARAMETER NetworkInterface
-			VCENTER Only. The network interface to use.
-
-		.PARAMETER MBRAM
-			VCENTER Only. The network interface to use.
-
 		.PARAMETER InstanceType
 			The instance type to launch the replica as.
 
-		.PARAMETER SubnetIDs
-			Specify the subnet Id(s) the instance will be associated with.
+		.PARAMETER PlacementGroup
+			AWS Only. The placement group to launch the instance in.
 
-		.PARAMETER CoresPerCpu
-			VCENTER Only. The number of cores per CPU.
-
-		.PARAMETER StaticIP
-			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
-
-		.PARAMETER Tags
-			AWS only. Tags that will be applied to the target machine. This parameter must specify Key and Value. For example:
-
-			@(@{Key = "name"; Value = "my server"}, @{Key = "env"; Value = "dev"})
-
-		.PARAMETER SecurityGroupAction
-			Currently only supports the value "FROM_POLICY".
+		.PARAMETER PrivateIPAction
+			The action for the instance's private IP address.
 
 		.PARAMETER PrivateIPs
 			If you select CUSTOM for PrivateIPAction, specify the private IPs you want associated with the instance.
 
-		.PARAMETER Tenancy
-			The tenancy of the replica.
+		.PARAMETER PublicIPAction
+			Whether to allocate an ephemeral public IP, or not. AS_SUBNET causes CloudEndure to copy this property from the source machine.
 
-		.PARAMETER ComputeLocationId
-			VCENTER only.
+		.PARAMETER RunAfterLaunch
+			AWS Only. Specify true to have the instance started after it is launched or false to leave it in a stopped state.
+
+		.PARAMETER SecurityGroupIds
+			AWS Only. The security groups that will be associated with the instance.
+
+		.PARAMETER StaticIP
+			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
+
+		.PARAMETER SubnetIDs
+			Specify the subnet Id(s) the instance will be associated with.
+			
+		.PARAMETER Tags
+			AWS only. Tags that will be applied to the target machine.
+
+		.PARAMETER MachineName
+			GCP only. The instance to create this blueprint for.
 
 		.PARAMETER SubnetsHostProject
 			GCP only. Host project for cross project network subnet.
-
-		.PARAMETER LogicalLocationId
-			VCENTER only. vcenter = vmFolder; relates to $ref LogicalLocation
-
-		.PARAMETER NetworkAdapterType
-			VCENTER only. The type of network adapter to use.
-
-		.PARAMETER BYOLOnDedicatedInstance
-			AWS only. Specifies whether to use byol windows license if dedicated instance tenancy is selected.
-
-		.PARAMETER PlacementGroup
-			AWS Only. The placement group to launch the instance in.
 
 		.PARAMETER Disks
 			AWS only. Target machine disk properties. An array of objects with properties as follows:
@@ -1555,18 +879,6 @@ Function New-CEBlueprint {
 				IOPS: Int >= 0
 				TYPE: "COPY_ORIGIN", "STANDARD", "SSD", "PROVISIONED_SSD", "ST1", "SC1"
 				NAME: Disk name as appears in the source machine object.
-
-		.PARAMETER PrivateIPAction
-			The action for the instance's private IP address.
-
-		.PARAMETER StaticIpAction
-			The action for the instance's static IP address.
-
-		.PARAMETER DedicatedHostIdentifier
-			AWS only. The Id for the dedicated host.
-
-		.PARAMETER UseSharedRAM
-			VCENTER only. Specifies whether to use shared RAM for the replica.		
 
 		.PARAMETER Session
             The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
@@ -1597,24 +909,6 @@ Function New-CEBlueprint {
 
 			{
 			  "iamRole": "string",
-			  "scsiAdapterType": "string",
-			  "publicIPAction": "ALLOCATE",
-			  "machineName": "string",
-			  "cpus": 0,
-			  "securityGroupIDs": [
-				"string"
-			  ],
-			  "runAfterLaunch": true,
-			  "recommendedPrivateIP": "string",
-			  "networkInterface": "string",
-			  "id": "string",
-			  "mbRam": 0,
-			  "instanceType": "string",
-			  "subnetIDs": [
-				"string"
-			  ],
-			  "coresPerCpu": 0,
-			  "recommendedInstanceType": "string",
 			  "staticIp": "string",
 			  "tags": [
 				{
@@ -1622,16 +916,17 @@ Function New-CEBlueprint {
 				  "value": "string"
 				}
 			  ],
-			  "securityGroupAction": "FROM_POLICY",
+			  "publicIPAction": "ALLOCATE",
+			  "machineName": "string",
 			  "privateIPs": [
 				"string"
 			  ],
-			  "tenancy": "SHARED",
-			  "computeLocationId": "string",
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
 			  "subnetsHostProject": "string",
-			  "logicalLocationId": "string",
-			  "networkAdapterType": "string",
-			  "byolOnDedicatedInstance": true,
+			  "instanceType": "string",
 			  "placementGroup": "string",
 			  "machineId": "string",
 			  "region": "string",
@@ -1644,13 +939,15 @@ Function New-CEBlueprint {
 			  ],
 			  "privateIPAction": "CREATE_NEW",
 			  "staticIpAction": "EXISTING",
-			  "dedicatedHostIdentifier": "string",
-			  "useSharedRam": true
+			  "id": "string",
+			  "subnetIDs": [
+				"string"
+			  ]
 			}
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/16/2019
+			LAST UPDATE: 9/26/2017
 			
 	#>
 	[CmdletBinding(DefaultParameterSetName="__AllParameterSets")]
@@ -1660,57 +957,23 @@ Function New-CEBlueprint {
 		[ValidateNotNull()]
 		[System.Collections.Hashtable]$Blueprint = @{},
 
-		[Parameter(Mandatory = $true, ParameterSetName = "BlueprintFile")]
-		[ValidateScript({
-			Test-Path $_
-		})]
-		[System.String]$Path,
+		[Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$Tags = @{},
 
-		[Parameter()]
 		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBENT")]
 		[System.String]$PublicIPAction,
 
-		[Parameter()]
+		[Parameter(ParameterSetName = "GCP")]
 		[ValidateNotNullOrEmpty()]
 		[System.String]$MachineName,
 
 		[Parameter(ParameterSetName = "AWS")]
 		[System.Boolean]$RunAfterLaunch = $true,
 
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$NetworkInterface,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateRange(0, 32)]
-		[System.Int32]$CoresPerCpu,		
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable[]]$Tags = @(),
-
-		[Parameter()]
-		[ValidateSet("FROM_POLICY")]
-		[System.String]$SecurityGroupAction = "FROM_POLICY",
-
-		[Parameter()]
-		[ValidateSet("SHARED", "DEDICATED", "HOST")]
-		[System.String]$Tenancy,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ComputeLocationId,
-
 		[Parameter(ParameterSetName = "GCP")]
 		[ValidateNotNullOrEmpty()]
 		[System.String]$SubnetsHostProject,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$LogicalLocationId,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[System.Boolean]$BYOLOnDedicatedInstance,
 
 		[Parameter(ParameterSetName = "AWS")]
 		[ValidateNotNull()]
@@ -1723,13 +986,6 @@ Function New-CEBlueprint {
 		[Parameter()]
 		[ValidateSet("EXISTING", "DONT_CREATE", "CREATE_NEW", "IF_IN_ORIGIN")]
 		[System.String]$StaticIPAction,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$DedicatedHostIdentifier,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[System.Boolean]$UseSharedRam,
 
 		[Parameter()]
 		[Switch]$PassThru,
@@ -1754,12 +1010,19 @@ Function New-CEBlueprint {
         [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
 
 		# Only generate the dynamic parameters if a blueprint doc wasn't specified
-		if (-not $PSBoundParameters.ContainsKey("Blueprint") -and -not $PSBoundParameters.ContainsKey("Path"))
+		if (-not $PSBoundParameters.ContainsKey("Blueprint"))
 		{
-			$DynSplat = @{}
-
 			if (-not [System.String]::IsNullOrEmpty($Session)) {
-				$DynSplat.Add("Session", $Session)
+				$DynSessionInfo = $script:Sessions.Get_Item($Session)
+				$DynSession = $Session
+			}
+			else {
+				$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+				$DynSession = $DynSessionInfo.User.Username
+			}
+
+			$DynSplat = @{
+				"Session" = $DynSession
 			}
 
 			if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
@@ -1767,13 +1030,9 @@ Function New-CEBlueprint {
 				$DynSplat.Add("ProjectId", $ProjectId)
 			}
 
-			[PSCustomObject]$TargetCloudRegion = Get-CETargetCloudRegion @DynSplat
+			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud @DynSplat | ConvertTo-Hashtable
 
-			$InstanceTypes = $TargetCloudRegion.InstanceTypes
-			$InstanceTypes += "COPY_ORIGIN"
-			$InstanceTypes += "CUSTOM"
-
-			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet $InstanceTypes -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet ($CECloud.InstanceTypes) -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
 			if ($PrivateIPAction -ieq "CUSTOM_IP")
 			{
@@ -1782,35 +1041,26 @@ Function New-CEBlueprint {
 
 			if ($StaticIPAction -ieq "EXISTING")
 			{
-				New-DynamicParameter -Name "StaticIP" -Type ([System.String]) -Mandatory -ValidateSet $TargetCloudRegion.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+				New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 			}
 
-			if ($TargetCloudRegion -ne "GENERIC")
-			{
-				$CloudName = Get-CECloud -Id $TargetCloudRegion.Cloud | Select-Object -ExpandProperty Name
-			}
-			else
-			{
-				$CloudName = $TargetCloudRegion
-			}
-			
-			switch ($CloudName)
+			switch ($CECloud.Cloud)
 			{
 				"AWS" {
 
-					if ($TargetCloudRegion.IAMRoles.Length -gt 0)
+					if ($CECloud.IAMRoles.Length -gt 0)
 					{
-						New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $TargetCloudRegion.IAMRoles -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $CECloud.IAMRoles -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 					}
 
-					if ($TargetCloudRegion.PlacementGroups.Length -gt 0)
+					if ($CECloud.PlacementGroups.Length -gt 0)
 					{
-						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet ($TargetCloudRegion.PlacementGroups) -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet ($CECloud.PlacementGroups) -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 					}
 
-					if ($TargetCloudRegion.Subnets.Length -gt 0)
+					if ($CECloud.Subnets.Length -gt 0)
 					{
-						$SubnetSet = $TargetCloudRegion.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
+						$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
 						# Add default to allow user to specify the default subnet for the configured region
 						$SubnetSet += "Default"
 
@@ -1820,7 +1070,6 @@ Function New-CEBlueprint {
 					$Type = Import-UnboundParameterCode -PassThru
 					$Subnets = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.Object]).Invoke($Type, @($PSCmdlet, "SubnetIDs", -1))
 
-					# Get the first subnet Id
 					$Key = [System.String]::Empty
 
 					if ($Subnets -is [System.Array])
@@ -1835,16 +1084,14 @@ Function New-CEBlueprint {
 						}
 					}
 
-					# Attempt to get the first subnet from the target region object
-					$Subnet = $TargetCloudRegion.Subnets | Where-Object {$_.Name -ieq $Key -or $_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
+					$Subnet = $CECloud.Subnets | Where-Object {$_.Name -ieq $Key -or $_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
 
 					# If the subnet is "Default", you won't be able to select a security group, so a new one will be created
 					# Make sure there are security groups in this region and that we found a matching one
-					# Subnet will be null if user selected "Default"
-					if ($TargetCloudRegion.SecurityGroups -ne $null -and $TargetCloudRegion.SecurityGroups.Length -gt 0 -and $Subnet -ne $null)
+					if ($CECloud.SecurityGroups -ne $null -and $CECloud.SecurityGroups.Length -gt 0 -and $Subnet -ne $null)
 					{
 						# Get the network Id based on the selected subnet so we can get the right security groups as options
-						[System.String[]]$SGSet = $TargetCloudRegion.SecurityGroups | Where-Object {$_.NetworkId -ieq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
+						[System.String[]]$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -ieq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
 
 						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 					}
@@ -1852,38 +1099,15 @@ Function New-CEBlueprint {
 					break
 				}
 				"GCP" {
-
+				    
 					break
 				}
 				"Azure" {
 
 					break
 				}
-				"VCENTER" {
-					if ($TargetCloudRegion.scsiAdapterTypes.Length -gt 0)
-					{
-						New-DynamicParameter -Name "SCSIAdapterType" -Type ([System.String]) -ParameterSets @("VCENTER") -ValidateSet $TargetCloudRegion.scsiAdapterTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
-
-					New-DynamicParameter -Name "Cpus" -Type ([System.Int32]) -ParameterSets @("VCENTER") -ValidateRange @(1, $TargetCloudRegion.maxCoresPerMachineCpu) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-					if ($TargetCloudRegion.networkAdapterTypes.Length -gt 0)
-					{
-						New-DynamicParameter -Name "NetworkAdapterType" -Type ([System.String]) -ParameterSets @("VCENTER") -ValidateSet $TargetCloudRegion.networkAdapterTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
-
-					New-DynamicParameter -Name "CoresPerCpu" -Type ([System.Int32]) -ParameterSets @("VCENTER") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					
-					New-DynamicParameter -Name "MBRAM" -Type ([System.Int32]) -ParameterSets @("VCENTER") -ValidateSet $TargetCloudRegion.maxCoresPerMachineCpu -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					
-					break
-				}
-				"GENERIC" {
-
-					break
-				}
 				default {
-					throw "The cloud environment $CloudName is not supported by this cmdlet yet."
+					throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
 					break
 				}
 			}
@@ -1896,62 +1120,137 @@ Function New-CEBlueprint {
 	}
 
 	Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+		 $SessionInfo = $null
 
-		$Body = ""
-		$BlueprintObject = [PSCustomObject]@{}
-		switch ($PSCmdlet.ParameterSetName)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			"BlueprintFile" {
-				$BlueprintObject = Get-Content -Path $Path -Raw | Convert-FromJson
-				break
-			}
-			"Blueprint" {
-				$BlueprintObject = [PSCustomObject]$Blueprint
-				break
-			}
-			default {
-				# This is going to take all of the parameters supplied, put them into a hash table, and then create a json
-				# document that is the blueprint
-				$Blueprint = Convert-ParametersToHashtable -Parameters (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters `
-					-ParameterSetName $PSCmdlet.ParameterSetName `
-					-RuntimeParameterDictionary $RuntimeParameterDictionary `
-					-BoundParameters $PSBoundParameters 
-
-				if ($BluePrint["StaticIPAction"] -ne "EXISTING") {
-					$BluePrint["staticIP"] = ""
-				}
-
-				if ($BluePrint["PrivateIPAction"] -ne "CUSTOM_IP") {
-					$BluePrint["privateIPs"] = @()
-				}
-
-				$BlueprintObject = [PSCustomObject]$Blueprint
-			}
-		}
-
-		if ($ProjectId -eq [System.Guid]::Empty)
-		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
-
-		[System.String]$UrlPath = "/projects/$ProjectId/blueprints"
-		$Body = ConvertTo-Json -InputObject $Blueprint
-
-		Write-Verbose -Message "Creating new blueprint:`r`n$Body"
-
-		try {
-			$Result = Invoke-CERequest -Path $UrlPath -Body $Body -Method Post -Session $Session -ExpectedResponseCode 201
-			Write-Verbose -Message "Blueprint successfully created."
-
-			if ($PassThru)
+			if ($PSCmdlet.ParameterSetName -ne "Blueprint")
 			{
-				Write-Output -InputObject $Result
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
+
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
+
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
+
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
+
+				$Blueprint = @{}
+
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
+				{
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the blueprint object
+							if ($Item.Key -ieq "Tags")
+							{
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
+								}
+
+								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $TagsToAdd)
+							}
+							else {
+								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
+				}
+			}
+
+			if ($BluePrint.StaticIPAction -ne "EXISTING") {
+                $BluePrint.staticIP = ""
+            }
+
+            if ($BluePrint.PrivateIPAction -ne "CUSTOM_IP") {
+                $BluePrint.privateIPs = @()
+            }
+
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
+			}
+
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/blueprints"
+
+			Write-Verbose -Message "Creating new blueprint:`r`n$(ConvertTo-Json -InputObject $Blueprint)"
+
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Body (ConvertTo-Json -InputObject $BluePrint) -ContentType "application/json" -Method Post -WebSession $SessionInfo.Session	-ErrorAction Stop	
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 201)
+			{
+				Write-Verbose -Message "Blueprint successfully created."
+
+				if ($PassThru)
+				{
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+				}
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue creating the blueprint: $StatusCode $Reason - $($Result.Content)"
 			}
 		}
-		catch [Exception] {
-			throw "There was an issue creating the new blueprint: $($_.Exception.Message)"
-		}	
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
 	}
 
 	End {
@@ -1964,7 +1263,7 @@ Function Get-CEBlueprint {
 			Gets blueprint information.
 
         .DESCRIPTION
-			The cmdlet retrieves a specific blueprint or a lost of blueprints of the specified or default project if no Id is provided.
+			The cmdlet retrieves a specific blueprint or all the blueprints of the specified account if no Id is provided.
 
 		.PARAMETER Id
 			The blueprint Id to retrieve. If this parameter is not specified, the blueprints are listed.
@@ -1987,12 +1286,12 @@ Function Get-CEBlueprint {
         .EXAMPLE
             Get-CEBlueprint
 
-            Retrieves the blueprints (up to 1500 starting at index 0) of the default project.
+            Retrieves the blueprints of the current account.
 
 		.EXAMPLE
             Get-CEBlueprint -Offset 1501 -Limit 10
 
-            Retrieves the blueprints at index 1501 through 1511. This skips listing the first 1501 blueprints (offset is a 0 based index).
+            Retrieves the blueprints at index 1501 through 1511. This skips listing the first 1501 blueprints.
 
 		.EXAMPLE 
 			Get-CEBlueprint -Id 184142f8-a581-4c86-9285-e24382d60d55
@@ -2010,24 +1309,6 @@ Function Get-CEBlueprint {
 			[
 				{
 				  "iamRole": "string",
-				  "scsiAdapterType": "string",
-				  "publicIPAction": "ALLOCATE",
-				  "machineName": "string",
-				  "cpus": 0,
-				  "securityGroupIDs": [
-					"string"
-				  ],
-				  "runAfterLaunch": true,
-				  "recommendedPrivateIP": "string",
-				  "networkInterface": "string",
-				  "id": "string",
-				  "mbRam": 0,
-				  "instanceType": "string",
-				  "subnetIDs": [
-					"string"
-				  ],
-				  "coresPerCpu": 0,
-				  "recommendedInstanceType": "string",
 				  "staticIp": "string",
 				  "tags": [
 					{
@@ -2035,16 +1316,17 @@ Function Get-CEBlueprint {
 					  "value": "string"
 					}
 				  ],
-				  "securityGroupAction": "FROM_POLICY",
+				  "publicIPAction": "ALLOCATE",
+				  "machineName": "string",
 				  "privateIPs": [
 					"string"
 				  ],
-				  "tenancy": "SHARED",
-				  "computeLocationId": "string",
+				  "securityGroupIDs": [
+					"string"
+				  ],
+				  "runAfterLaunch": true,
 				  "subnetsHostProject": "string",
-				  "logicalLocationId": "string",
-				  "networkAdapterType": "string",
-				  "byolOnDedicatedInstance": true,
+				  "instanceType": "string",
 				  "placementGroup": "string",
 				  "machineId": "string",
 				  "region": "string",
@@ -2057,14 +1339,16 @@ Function Get-CEBlueprint {
 				  ],
 				  "privateIPAction": "CREATE_NEW",
 				  "staticIpAction": "EXISTING",
-				  "dedicatedHostIdentifier": "string",
-				  "useSharedRam": true
+				  "id": "string",
+				  "subnetIDs": [
+					"string"
+				  ]
 				}
 			]
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/17/2019
+			LAST UPDATE: 9/7/2017
     #>
     [CmdletBinding(DefaultParameterSetName = "List")]
     [OutputType([PSCustomObject], [PSCustomObject[]])]
@@ -2104,126 +1388,224 @@ Function Get-CEBlueprint {
     }
 
     Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
-		
-		if ($ProjectId -eq [System.Guid]::Empty)
+        $SessionInfo = $null
+
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
-
-		[System.String]$Path = "/projects/$ProjectId/blueprints"
-
-		[PSCustomObject[]]$Results = @()
-
-		switch ($PSCmdlet.ParameterSetName)
-		{
-			"Get" {
-				if ($Id -ne [System.Guid]::Empty)
-				{
-					$Path += "/$($Id.ToString())"
-				}
-
-				$ErrorHandling = {
-					Param($StatusCode, $Content, $ErrorMessage, $BlueprintId)
-				
-					switch ($StatusCode)
-					{
-						200 {
-							Write-Output -InputObject $Content
-							break
-						}
-						404 {
-							throw "Could not find a blueprint with id $BlueprintId."
-						}
-						default {
-							throw $ErrorMessage
-						}			
-					}
-				}
-
-				try {
-					$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ErrorHandling $ErrorHandling -ErrorHandlingArgs @($Id)
-				}
-				catch [Exception] {
-					throw "There was an issue retrieving blueprints: $($_.Exception.Message)."
-				}
-
-				$Results += $Result
-
-				break
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
 			}
-			"List" {
 
-				# If non default values for either were specified, update the URI
-				if ($Offset -gt 0 -or $Limit -lt 1500)
-				{
-					$QueryString = [System.String]::Empty
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/blueprints"
 
-					if ($Offset -gt 0)
+			[PSCustomObject[]]$Results = @()
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					if ($Id -ne [System.Guid]::Empty)
 					{
-						$QueryString += "&offset=$Offset"
+						$Uri += "/$($Id.ToString())"
 					}
 
-					if ($Limit -lt 1500)
-					{
-						$QueryString += "&limit=$Limit"
-					}
+					$StatusCode = 0
+					$Reason = ""
 
-					# Remove the first character which is an unecessary ampersand
-					$Path += "?$($QueryString.Substring(1))"
-				}
-
-				try {
-					$Result = Invoke-CERequest -Method Get -Path $Path -Session $Session -ExpectedResponseCode 200
-					$Results += $Result
-				}
-				catch [Exception] {
-					throw "There was an issue retrieving blueprints: $($_.Exception.Message)"
-				}
-				
-				break
-			}
-			"All" {
-
-				$Offset = 0
-				$Limit = 1500
-				[System.Int32]$ResultCount = 0
-
-				# Go until the results returned are less than the specified limit
-				do
-				{
-					Write-Verbose -Message "Querying blueprints from $Offset to $($Offset + $Limit)."
-
-					[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
-					[System.String]$TempUri = "$Path$QueryString"
-					
 					try {
-						$Result = Invoke-CERequest -Method Get -Path $TempUri -Session $Session -ExpectedResponseCode 200
-						$Results += $Result
-						$ResultCount = $Result.Length
-						$Offset += $Limit
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+						$StatusCode = $Result.StatusCode
+						$Reason = $Result.StatusDescription
 					}
-					catch [Exception] {
-						throw "There was an issue retrieving blueprints: $($_.Exception.Message)"
-					}
-				} while ($ResultCount -ge $Limit)
+					catch [System.Net.WebException] {
+						[System.Net.WebException]$Ex = $_.Exception
 
-				break
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
+					}
+					catch [Exception]  {
+						$Reason = $_.Exception.Message
+					}
+
+					if ($StatusCode -eq 200)
+					{
+						$Results += ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+					}
+					else
+					{
+						throw "There was an issue retrieving blueprints: $StatusCode $Reason - $($Result.Content)"
+					}
+
+					break
+				}
+				"List" {
+
+					# If non default values for either were specified, update the URI
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+
+					$StatusCode = 0
+					$Reason = ""
+
+					try {
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+						$StatusCode = $Result.StatusCode
+						$Reason = $Result.StatusDescription
+					}
+					catch [System.Net.WebException] {
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
+					}
+					catch [Exception]  {
+						$Reason = $_.Exception.Message
+					}
+
+					if ($StatusCode -eq 200)
+					{
+						$Results += ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+					}
+					else
+					{
+						throw "There was an issue retrieving blueprints: $StatusCode $Reason - $($Result.Content)"
+					}
+					
+					break
+				}
+				"All" {
+
+					$Offset = 0
+					$Limit = 1500
+					[System.Int32]$ResultCount = 0
+
+					# Go until the results returned are less than the specified limit
+					do
+					{
+						Write-Verbose -Message "Querying blueprints from $Offset to $($Offset + $Limit)."
+
+						[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
+						[System.String]$TempUri = "$Uri$QueryString"
+						
+						$StatusCode = 0
+						$Reason = ""
+
+						try {
+							[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $TempUri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+							$StatusCode = $Result.StatusCode
+							$Reason = $Result.StatusDescription
+						}
+						catch [System.Net.WebException] {
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
+						}
+						catch [Exception]  {
+							$Reason = $_.Exception.Message
+						}
+
+						if ($StatusCode -eq 200)
+						{
+							[PSCustomObject[]]$Content = ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+							$Results += $Content
+							$ResultCount = $Content.Length
+							$Offset += $Limit
+						}
+						else
+						{
+							throw "There was an issue retrieving blueprints: $StatusCode $Reason - $($Result.Content)"
+						}
+					} while ($ResultCount -ge $Limit)
+
+					break
+				}
+				default {
+					throw "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
 			}
-			default {
-				throw "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
-				break
+
+			if ($PSCmdlet.ParameterSetName -eq "Get")
+			{
+				Write-Output -InputObject $Results[0]
+			}
+			else
+			{
+				Write-Output -InputObject $Results
 			}
 		}
-
-		if ($PSCmdlet.ParameterSetName -eq "Get")
+		else 
 		{
-			Write-Output -InputObject $Results[0]
-		}
-		else
-		{
-			# In case this is a 1 item array, don't unbox
-			,$Results
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
     }
 
@@ -2250,21 +1632,6 @@ Function Set-CEBlueprint {
 
 			{
 			  "iamRole": "string",
-			  "scsiAdapterType": "string",
-			  "publicIPAction": "ALLOCATE",
-			  "machineName": "string",
-			  "cpus": 0,
-			  "securityGroupIDs": [
-				"string"
-			  ],
-			  "runAfterLaunch": true,
-			  "networkInterface": "string",
-			  "mbRam": 0,
-			  "instanceType": "string",
-			  "subnetIDs": [
-				"string"
-			  ],
-			  "coresPerCpu": 0,
 			  "staticIp": "string",
 			  "tags": [
 				{
@@ -2272,103 +1639,69 @@ Function Set-CEBlueprint {
 				  "value": "string"
 				}
 			  ],
-			  "securityGroupAction": "FROM_POLICY",
+			  "publicIPAction": "ALLOCATE",		# "ALLOCATE" "DONT_ALLOCATE" "AS_SUBNET"
 			  "privateIPs": [
 				"string"
 			  ],
-			  "tenancy": "SHARED",
-			  "computeLocationId": "string",
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
 			  "subnetsHostProject": "string",
-			  "logicalLocationId": "string",
-			  "networkAdapterType": "string",
-			  "byolOnDedicatedInstance": true,
+			  "instanceType": "string",
 			  "placementGroup": "string",
 			  "disks": [
 				{
 				  "iops": 0,
-				  "type": "COPY_ORIGIN",
+				  "type": "COPY_ORIGIN",		# "COPY_ORIGIN" "STANDARD" "SSD" "PROVISIONED_SSD" "ST1" "SC1"
 				  "name": "string"
 				}
 			  ],
-			  "privateIPAction": "CREATE_NEW",
-			  "staticIpAction": "EXISTING",
-			  "dedicatedHostIdentifier": "string",
-			  "useSharedRam": true
+			  "privateIPAction": "CREATE_NEW",	# "CREATE_NEW" "COPY_ORIGIN" "CUSTOM_IP"
+			  "staticIpAction": "EXISTING",		# "EXISTING" "DONT_CREATE" "CREATE_NEW" "IF_IN_ORIGIN"
+			  "subnetIDs": [
+				"string"
+			  ]
 			}
 
-		.PARAMETER Path
-			The path to a file containing the JSON definition of the blueprint.
-
 		.PARAMETER IAMRole
-			AWS only. The AWS IAM Role to associate with this blueprint.
-
-		.PARAMETER ScsiAdapterType
-			VCENTER Only. The scsi adapter type.
-
-		.PARAMETER PublicIPAction
-			Whether to allocate an ephemeral public IP, or not. AS_SUBNET causes CloudEndure to copy this property from the source machine.
-	
-		.PARAMETER MachineName
-			The instance to create this blueprint for.
-
-		.PARAMETER Cpus
-			VCENTER Only. Number of CPUs per target machine.
-
-		.PARAMETER SecurityGroupIds
-			AWS Only. The security groups that will be associated with the instance.
-
-		.PARAMETER RunAfterLaunch
-			AWS Only. Specify true to have the instance started after it is launched or false to leave it in a stopped state.
-
-		.PARAMETER NetworkInterface
-			VCENTER Only. The network interface to use.
-
-		.PARAMETER MBRAM
-			VCENTER Only. The network interface to use.
+			AWS Only. The AWS IAM Role to associate with this blueprint.
 
 		.PARAMETER InstanceType
 			The instance type to launch the replica as.
 
-		.PARAMETER SubnetIDs
-			Specify the subnet Id(s) the instance will be associated with.
+		.PARAMETER PlacementGroup
+			AWS Only. The placement group to launch the instance in.
 
-		.PARAMETER CoresPerCpu
-			VCENTER Only. The number of cores per CPU.
-
-		.PARAMETER StaticIP
-			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
-
-		.PARAMETER Tags
-			AWS only. Tags that will be applied to the target machine. This parameter must specify Key and Value. For example:
-
-			@(@{Key = "name"; Value = "my server"}, @{Key = "env"; Value = "dev"})
-
-		.PARAMETER SecurityGroupAction
-			Currently only supports the value "FROM_POLICY".
+		.PARAMETER PrivateIPAction
+			The action for the instance's private IP address.
 
 		.PARAMETER PrivateIPs
 			If you select CUSTOM for PrivateIPAction, specify the private IPs you want associated with the instance.
 
-		.PARAMETER Tenancy
-			The tenancy of the replica.
+		.PARAMETER PublicIPAction
+			Whether to allocate an ephemeral public IP, or not. AS_SUBNET causes CloudEndure to copy this property from the source machine.
 
-		.PARAMETER ComputeLocationId
-			VCENTER only.
+		.PARAMETER RunAfterLaunch
+			AWS Only. Specify true to have the instance started after it is launched or false to leave it in a stopped state.
+
+		.PARAMETER SecurityGroupIds
+			AWS Only. The security groups that will be associated with the instance.
+
+		.PARAMETER StaticIP
+			If you select ALLOCATE for StaticIPAction, then specify Elatic IP address to associate with the instance.
+
+		.PARAMETER SubnetIDs
+			AWS Only. Specify the subnet Id(s) the instance will be associated with.
+
+		.PARAMETER MachineName
+			GCP only. The instance to create this blueprint for.
 
 		.PARAMETER SubnetsHostProject
-			GCP only. Host project for cross project network subnet.
-
-		.PARAMETER LogicalLocationId
-			VCENTER only. vcenter = vmFolder; relates to $ref LogicalLocation
-
-		.PARAMETER NetworkAdapterType
-			VCENTER only. The type of network adapter to use.
-
-		.PARAMETER BYOLOnDedicatedInstance
-			AWS only. Specifies whether to use byol windows license if dedicated instance tenancy is selected.
-
-		.PARAMETER PlacementGroup
-			AWS Only. The placement group to launch the instance in.
+			GCP Only. Host project for cross project network subnet.
+            
+		.PARAMETER Tags
+			AWS Only. The tags that will be associated with the instance.
 
 		.PARAMETER Disks
 			AWS only. Target machine disk properties. An array of objects with properties as follows:
@@ -2376,18 +1709,6 @@ Function Set-CEBlueprint {
 				IOPS: Int >= 0
 				TYPE: "COPY_ORIGIN", "STANDARD", "SSD", "PROVISIONED_SSD", "ST1", "SC1"
 				NAME: Disk name as appears in the source machine object.
-
-		.PARAMETER PrivateIPAction
-			The action for the instance's private IP address.
-
-		.PARAMETER StaticIpAction
-			The action for the instance's static IP address.
-
-		.PARAMETER DedicatedHostIdentifier
-			AWS only. The Id for the dedicated host.
-
-		.PARAMETER UseSharedRAM
-			VCENTER only. Specifies whether to use shared RAM for the replica.		
 
 		.PARAMETER InstanceId
 			The id of the CE instance whose blueprint you want to update.
@@ -2423,21 +1744,6 @@ Function Set-CEBlueprint {
 			The JSON representation of the return value:
 			{
 			  "iamRole": "string",
-			  "scsiAdapterType": "string",
-			  "publicIPAction": "ALLOCATE",
-			  "machineName": "string",
-			  "cpus": 0,
-			  "securityGroupIDs": [
-				"string"
-			  ],
-			  "runAfterLaunch": true,
-			  "networkInterface": "string",
-			  "mbRam": 0,
-			  "instanceType": "string",
-			  "subnetIDs": [
-				"string"
-			  ],
-			  "coresPerCpu": 0,
 			  "staticIp": "string",
 			  "tags": [
 				{
@@ -2445,17 +1751,20 @@ Function Set-CEBlueprint {
 				  "value": "string"
 				}
 			  ],
-			  "securityGroupAction": "FROM_POLICY",
+			  "publicIPAction": "ALLOCATE",
+			  "machineName": "string",
 			  "privateIPs": [
 				"string"
 			  ],
-			  "tenancy": "SHARED",
-			  "computeLocationId": "string",
+			  "securityGroupIDs": [
+				"string"
+			  ],
+			  "runAfterLaunch": true,
 			  "subnetsHostProject": "string",
-			  "logicalLocationId": "string",
-			  "networkAdapterType": "string",
-			  "byolOnDedicatedInstance": true,
+			  "instanceType": "string",
 			  "placementGroup": "string",
+			  "machineId": "string",
+			  "region": "string",
 			  "disks": [
 				{
 				  "iops": 0,
@@ -2465,13 +1774,15 @@ Function Set-CEBlueprint {
 			  ],
 			  "privateIPAction": "CREATE_NEW",
 			  "staticIpAction": "EXISTING",
-			  "dedicatedHostIdentifier": "string",
-			  "useSharedRam": true
+			  "id": "string",
+			  "subnetIDs": [
+				"string"
+			  ]
 			}
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/17/2019
+			LAST UPDATE: 10/6/2017
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
     [OutputType([PSCustomObject])]
@@ -2492,76 +1803,17 @@ Function Set-CEBlueprint {
 		[ValidateNotNull()]
 		[System.Collections.Hashtable]$Blueprint = @{},
 
-		[Parameter(Mandatory = $true, ParameterSetName = "BlueprintFile")]
-		[ValidateScript({
-			Test-Path $_
-		})]
-		[System.String]$Path,
-
 		[Parameter()]
-		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBENT")]
-		[System.String]$PublicIPAction,
-
-		[Parameter()]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$MachineName,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[System.Boolean]$RunAfterLaunch = $true,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$NetworkInterface,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateRange(0, 32)]
-		[System.Int32]$CoresPerCpu,		
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable[]]$Tags = @(),
-
-		[Parameter()]
-		[ValidateSet("FROM_POLICY")]
-		[System.String]$SecurityGroupAction = "FROM_POLICY",
-
-		[Parameter()]
-		[ValidateSet("SHARED", "DEDICATED", "HOST")]
-		[System.String]$Tenancy,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ComputeLocationId,
-
-		[Parameter(ParameterSetName = "GCP")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$SubnetsHostProject,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$LogicalLocationId,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[System.Boolean]$BYOLOnDedicatedInstance,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable[]]$Disks,
-
-		[Parameter()]
-		[ValidateSet("CREATE_NEW", "COPY_ORIGIN", "CUSTOM_IP")]
+		[ValidateSet("COPY_ORIGIN", "CREATE_NEW", "CUSTOM_IP")]
 		[System.String]$PrivateIPAction,
 
 		[Parameter()]
-		[ValidateSet("EXISTING", "DONT_CREATE", "CREATE_NEW", "IF_IN_ORIGIN")]
+		[ValidateSet("ALLOCATE", "DONT_ALLOCATE", "AS_SUBNET")]
+		[System.String]$PublicIPAction,
+
+		[Parameter()]
+		[ValidateSet("DONT_CREATE", "CREATE_NEW", "EXISTING", "IF_IN_ORIGIN")]
 		[System.String]$StaticIPAction,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$DedicatedHostIdentifier,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[System.Boolean]$UseSharedRam,
 
 		[Parameter()]
 		[ValidateScript({
@@ -2588,13 +1840,21 @@ Function Set-CEBlueprint {
 		# Create the dictionary 
         [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
 
-		# Only generate the dynamic parameters if a blueprint doc wasn't specified
-		if (-not $PSBoundParameters.ContainsKey("Blueprint") -and -not $PSBoundParameters.ContainsKey("Path"))
+		# If an Instance or blueprint Id was presented, then start generating the dynamic parameters
+		# Don't check blueprint, it could still be set from a previous run
+		if (($BlueprintId -ne $null -and $BlueprintId -ne [System.Guid]::Empty) -or ($InstanceId -ne $null -and $InstanceId -ne [System.Guid]::Empty) -and -not $PSBoundParameters.ContainsKey("Blueprint"))
 		{
-			$DynSplat = @{}
-
 			if (-not [System.String]::IsNullOrEmpty($Session)) {
-				$DynSplat.Add("Session", $Session)
+				$DynSessionInfo = $script:Sessions.Get_Item($Session)
+				$DynSession = $Session
+			}
+			else {
+				$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+				$DynSession = $DynSessionInfo.User.Username
+			}
+
+			$DynSplat = @{
+				"Session" = $DynSession
 			}
 
 			if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
@@ -2602,60 +1862,99 @@ Function Set-CEBlueprint {
 				$DynSplat.Add("ProjectId", $ProjectId)
 			}
 
-			[PSCustomObject]$TargetCloudRegion = Get-CETargetCloudRegion @DynSplat
-
-			$InstanceTypes = $TargetCloudRegion.InstanceTypes
-			$InstanceTypes += "COPY_ORIGIN"
-			$InstanceTypes += "CUSTOM"
-
-			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet $InstanceTypes -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-			if ($PrivateIPAction -ieq "CUSTOM_IP")
+			[System.Collections.Hashtable]$CECloud = Get-CETargetCloud @DynSplat | ConvertTo-Hashtable
+			
+			if ($BlueprintId -ne $null -and $BlueprintId -ne [System.Guid]::Empty)
 			{
-				New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -ValidateNotNullOrEmpty -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-			}
-
-			if ($StaticIPAction -ieq "EXISTING")
-			{
-				New-DynamicParameter -Name "StaticIP" -Type ([System.String]) -Mandatory -ValidateSet $TargetCloudRegion.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-			}
-
-			if ($TargetCloudRegion -ne "GENERIC")
-			{
-				$CloudName = Get-CECloud -Id $TargetCloudRegion.Cloud | Select-Object -ExpandProperty Name
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $BlueprintId @DynSplat | ConvertTo-Hashtable
 			}
 			else
 			{
-				$CloudName = $TargetCloudRegion
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -All @DynSplat | Where-Object {$_.machineId -eq $InstanceId} | Select-Object -First 1 | ConvertTo-Hashtable
 			}
-			
-			switch ($CloudName)
+
+			#region InstanceType
+
+			New-DynamicParameter -Name "InstanceType" -Type ([System.String]) -ValidateSet $CECloud.InstanceTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+			#endregion
+
+			if ($PrivateIPAction -ieq "CUSTOM_IP" -or $ExistingBlueprint.PrivateIPAction -ieq "CUSTOM_IP")
+			{
+				#region PrivateIPs
+
+				New-DynamicParameter -Name "PrivateIPs" -Type ([System.String[]]) -Mandatory:($PrivateIPAction -ieq "CUSTOM_IP") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+				#endregion
+			}
+
+			if ($StaticIPAction -ieq "EXISTING" -or $ExistingBlueprint.StaticIPAction -ieq "EXISTING")
+			{
+				#region EIP
+
+				New-DynamicParameter -Name "StaticIP" -Type ([System.String[]]) -Mandatory:($StaticIPAction -ieq "EXISTING") -ValidateSet $CECloud.StaticIPs -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+				#endregion
+			}
+
+			switch ($CECloud.Cloud)
 			{
 				"AWS" {
 
-					if ($TargetCloudRegion.IAMRoles.Length -gt 0)
-					{
-						New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $TargetCloudRegion.IAMRoles -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
+					#region IAMRole
 
-					if ($TargetCloudRegion.PlacementGroups.Length -gt 0)
-					{
-						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet ($TargetCloudRegion.PlacementGroups) -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
+					$IAMSet = $CECloud.IAMRoles
+					$IAMSet += [System.String]::Empty
 
-					if ($TargetCloudRegion.Subnets.Length -gt 0)
+					New-DynamicParameter -Name "IAMRole" -Type ([System.String]) -ValidateSet $IAMSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        
+					#endregion
+
+					#region RunAfterLaunch
+
+					New-DynamicParameter -Name "RunAfterLaunch" -Type ([System.Boolean]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+
+					#region Tags
+
+					New-DynamicParameter -Name "Tags" -Type ([System.Collections.Hashtable]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+
+					#region Disks
+
+					New-DynamicParameter -Name "Disks" -Type ([System.Collections.Hashtable[]]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+					#endregion
+
+					if ($CECloud.PlacementGroups.Length -gt 0)
 					{
-						$SubnetSet = $TargetCloudRegion.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
-						# Add default to allow user to specify the default subnet for the configured region
+						#region PlacementGroup
+
+						$PlacementSet = $CECloud.PlacementGroups
+						$PlacementSet += [System.String]::Empty
+
+						New-DynamicParameter -Name "PlacementGroup" -Type ([System.String]) -ValidateSet $PlacementSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        
+						#endregion
+					}
+		
+					if ($CECloud.Subnets.Length -gt 0) 
+					{
+						#region SubnetIDs
+
+						$SubnetSet = $CECloud.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
 						$SubnetSet += "Default"
 
-						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ValidateSet $SubnetSet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						New-DynamicParameter -Name "SubnetIDs" -Type ([System.String[]]) -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+						#endregion
 					}
 
 					$Type = Import-UnboundParameterCode -PassThru
 					$Subnets = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.Object]).Invoke($Type, @($PSCmdlet, "SubnetIDs", -1))
 
-					# Get the first subnet Id
 					$Key = [System.String]::Empty
 
 					if ($Subnets -is [System.Array])
@@ -2670,56 +1969,41 @@ Function Set-CEBlueprint {
 						}
 					}
 
-					# Attempt to get the first subnet from the target region object
-					$Subnet = $TargetCloudRegion.Subnets | Where-Object {$_.Name -ieq $Key -or $_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
+					$Subnet = $CECloud.Subnets | Where-Object {$_.Name -ieq $Key -or $_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
 
-					# If the subnet is "Default", you won't be able to select a security group, so a new one will be created
-					# Make sure there are security groups in this region and that we found a matching one
-					# Subnet will be null if user selected "Default"
-					if ($TargetCloudRegion.SecurityGroups -ne $null -and $TargetCloudRegion.SecurityGroups.Length -gt 0 -and $Subnet -ne $null)
+					if ($Subnet -ne $null -or ($ExistingBlueprint.SubnetIDs -ne $null -and $ExistingBlueprint.SubnetIDs.Length -gt 0))
 					{
-						# Get the network Id based on the selected subnet so we can get the right security groups as options
-						[System.String[]]$SGSet = $TargetCloudRegion.SecurityGroups | Where-Object {$_.NetworkId -ieq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
+						# Set the network Id based on the selected subnet so we can get the right security groups as options
+						if ($Subnet -ne $null) {
+							$VpcId = $Subnet.NetworkId
+						}
+						else {
+							$VpcId = $CECloud.Subnets | Where-Object {$_.Id -ieq $ExistingBlueprint.SubnetIDs[0]} | Select-Object -First 1 -ErrorAction SilentlyContinue
+						}
 
-						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+						#region SecurityGroups
+
+						$SGSet = $CECloud.SecurityGroups | Where-Object {$_.NetworkId -ieq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
+						$SGSet += [System.String]::Empty
+
+						New-DynamicParameter -Name "SecurityGroupIDs" -Type ([System.String[]]) -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        
+						#endregion
 					}
 
 					break
 				}
 				"GCP" {
-
+					New-DynamicParameter -Name "SubnetsHostProject" -Type ([System.String]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+					New-DynamicParameter -Name "MachineName" -Type ([System.String[]]) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 					break
 				}
 				"Azure" {
 
 					break
 				}
-				"VCENTER" {
-					if ($TargetCloudRegion.scsiAdapterTypes.Length -gt 0)
-					{
-						New-DynamicParameter -Name "SCSIAdapterType" -Type ([System.String]) -ParameterSets @("VCENTER") -ValidateSet $TargetCloudRegion.scsiAdapterTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
-
-					New-DynamicParameter -Name "Cpus" -Type ([System.Int32]) -ParameterSets @("VCENTER") -ValidateRange @(1, $TargetCloudRegion.maxCoresPerMachineCpu) -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-
-					if ($TargetCloudRegion.networkAdapterTypes.Length -gt 0)
-					{
-						New-DynamicParameter -Name "NetworkAdapterType" -Type ([System.String]) -ParameterSets @("VCENTER") -ValidateSet $TargetCloudRegion.networkAdapterTypes -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
-
-					New-DynamicParameter -Name "CoresPerCpu" -Type ([System.Int32]) -ParameterSets @("VCENTER") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					
-					New-DynamicParameter -Name "MBRAM" -Type ([System.Int32]) -ParameterSets @("VCENTER") -ValidateSet $TargetCloudRegion.maxCoresPerMachineCpu -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					
-					break
-				}
-				"GENERIC" {
-
-					break
-				}
 				default {
-					throw "The cloud environment $CloudName is not supported by this cmdlet yet."
-					break
+					throw "The cloud environment $($CECloud.Cloud) is not supported by this cmdlet yet."
 				}
 			}
 		}
@@ -2731,96 +2015,167 @@ Function Set-CEBlueprint {
     }
 
     Process {
-        $SessionInfo = Get-CESessionOrDefault -Session $Session
+        $SessionInfo = $null
 
-		$DynSplat = @{}
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $Session = $SessionInfo.User.Username
+        }
 
-		if ([System.String]::IsNullOrEmpty($Session))
-		{
-			$DynSplat.Add("Session", $Session)
-		}
+		if ($SessionInfo -ne $null) 
+		{	 
+			[System.Collections.Hashtable]$SessSplat = @{
+				"Session" = $Session
+			}
 
-		if ($BlueprintId -ne [System.Guid]::Empty)
-		{
-			# This will throw an exception if the blueprint can't be found
-			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $BlueprintId @DynSplat | ConvertTo-Hashtable
-		}
-		else
-		{
-			[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -All @DynSplat | Where-Object {$_.machineId -eq $InstanceId} | Select-Object -First 1 | ConvertTo-Hashtable
-
-			if ($ExistingBlueprint -eq $null)
+			if ($ProjectId -ne [System.Guid]::Empty)
 			{
-				throw "Could not find an existing blueprint for instance $InstanceId."
+				$SessSplat.Add("ProjectId", $ProjectId)
 			}
-		}
 
-		$BlueprintObject = [PSCustomObject]@{}
-
-		switch ($PSCmdlet.ParameterSetName)
-		{
-			"BlueprintFile" {
-				$BlueprintObject = Get-Content -Path $Path -Raw | Convert-FromJson
-				break
+			if ($BlueprintId -ne [System.Guid]::Empty)
+			{
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -Id $BlueprintId @DynSplat | ConvertTo-Hashtable
 			}
-			"Blueprint" {
-				$BlueprintObject = [PSCustomObject]$Blueprint
-				break
+			else
+			{
+				[System.Collections.Hashtable]$ExistingBlueprint = Get-CEBlueprint -All @DynSplat | Where-Object {$_.machineId -eq $InstanceId} | Select-Object -First 1 | ConvertTo-Hashtable
 			}
-			default {
-				# This is going to take all of the parameters supplied, put them into a hash table, and then create a json
-				# document that is the blueprint
-				$Blueprint = Convert-ParametersToHashtable -Parameters (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters `
-					-ParameterSetName $PSCmdlet.ParameterSetName `
-					-RuntimeParameterDictionary $RuntimeParameterDictionary `
-					-BoundParameters $PSBoundParameters 
 
-				$BlueprintObject = [PSCustomObject]$Blueprint
-			}
-		}
+			# If a blueprint hashtable wasn't provided, build one for the parameter set being used
+			if ($PSCmdlet.ParameterSetName -ne "Blueprint")
+			{
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
 
-		# Merge the original and new blueprint
-		[System.Collections.Hashtable]$NewBluePrint = Merge-HashTables -Source $ExistingBlueprint -Update ($BlueprintObject | ConvertTo-Hashtable)
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key) -and -not @("BlueprintId", "InstanceId", "Blueprint").Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
 
-        if ($NewBluePrint["StaticIPAction"] -ne "EXISTING") {
-            $NewBluePrint["StaticIP"] = ""
-        }
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
 
-        if ($NewBluePrint["PrivateIPAction"] -ne "CUSTOM_IP") {
-            $NewBluePrint["PrivateIPs"] = @()
-        }
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
 
-		if ($ProjectId -eq [System.Guid]::Empty)
-		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
+				$Blueprint = @{}
 
-		[System.String]$UrlPath = "/projects/$ProjectId/blueprints/$($NewBluePrint["Id"])"
-
-		$ConfirmMessage = "Are you sure you want to update the blueprint configuration?"
-
-		$Body = ConvertTo-Json -InputObject $NewBluePrint
-
-		$WhatIfDescription = "Updated blueprint to $Body"
-		$ConfirmCaption = "Update Blueprint"
-
-		if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-		{
-			Write-Verbose -Message "Updating blueprint to :`r`n$Body"
-			
-			try {
-				$Result = Invoke-CERequest -Path $UrlPath -Body $Body -Method Patch -Session $Session
-
-				Write-Verbose -Message "Blueprint successfully modified."
-
-				if ($PassThru)
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
 				{
-					Write-Output -InputObject $Result
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the blueprint object
+
+							if ($Item.Key -ieq "Tags")
+							{
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
+								}
+
+								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $TagsToAdd)
+							}
+							else {
+								$Blueprint.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
 				}
 			}
-			catch [Exception] {
-				throw "There was an issue updating the blueprint: $($_.Exception.Message)"
+
+			# Merge the original and new blueprint
+			[System.Collections.Hashtable]$NewBluePrint = Merge-HashTables -Source $ExistingBlueprint -Update $Blueprint
+
+            if ($NewBluePrint.StaticIPAction -ne "EXISTING") {
+                $NewBluePrint.StaticIP = ""
+            }
+
+            if ($NewBluePrint.PrivateIPAction -ne "CUSTOM_IP") {
+                $NewBluePrint.PrivateIPs = @()
+            }
+
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
 			}
+
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/blueprints/$($NewBluePrint.Id)"
+
+			$ConfirmMessage = "Are you sure you want to update the blueprint configuration?"
+
+			$WhatIfDescription = "Updated blueprint to $(ConvertTo-Json -InputObject $NewBluePrint)"
+			$ConfirmCaption = "Update Blueprint"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				Write-Verbose -Message "Updating blueprint to :`r`n$(ConvertTo-Json -InputObject $NewBluePrint)"
+				
+				$StatusCode = 0
+				$Reason = ""
+
+				try {
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Body (ConvertTo-Json -InputObject $NewBluePrint) -ContentType "application/json" -Method Patch -WebSession $SessionInfo.Session -ErrorAction Stop
+					$StatusCode = $Result.StatusCode
+					$Reason = $Result.StatusDescription
+				}
+				catch [System.Net.WebException] {
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
+				}
+				catch [Exception]  {
+					$Reason = $_.Exception.Message
+				}
+
+				if ($StatusCode -eq 200)
+				{
+					Write-Verbose -Message "Blueprint successfully modified."
+
+					if ($PassThru)
+					{
+						Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+					}
+				}
+				else
+				{
+					Write-Warning -Message "There was an issue updating the blueprint: $StatusCode $Reason - $($Result.Content)"
+				}
+			}
+		}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
     }
 
@@ -2883,7 +2238,7 @@ Function Get-CEMachineRecoveryPoints {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 10/6/2017
 	#>
 	[CmdletBinding()]
 	Param(
@@ -2919,44 +2274,92 @@ Function Get-CEMachineRecoveryPoints {
 	}
 
 	Process {
+		$SessionInfo = $null
 
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
-		
-		if ($ProjectId -eq [System.Guid]::Empty)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session.ToLower())
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
-
-		[System.String]$Path = "/projects/$ProjectId/machines/$InstanceId/pointsintime"
-
-		if ($Offset -gt 0 -or $Limit -lt 1500)
-		{
-			$QueryString = [System.String]::Empty
-
-			if ($Offset -gt 0)
+			if ($ProjectId -eq [System.Guid]::Empty)
 			{
-				$QueryString += "&offset=$Offset"
+				$ProjectId = $SessionInfo.ProjectId
 			}
 
-			if ($Limit -lt 1500)
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/machines/$InstanceId/pointsintime"
+
+			if ($Offset -gt 0 -or $Limit -lt 1500)
 			{
-				$QueryString += "&limit=$Limit"
+				$QueryString = [System.String]::Empty
+
+				if ($Offset -gt 0)
+				{
+					$QueryString += "&offset=$Offset"
+				}
+
+				if ($Limit -lt 1500)
+				{
+					$QueryString += "&limit=$Limit"
+				}
+
+				# Remove the first character which is an unecessary ampersand
+				$Uri += "?$($QueryString.Substring(1))"
 			}
 
-			# Remove the first character which is an unecessary ampersand
-			$Path += "?$($QueryString.Substring(1))"
-		}
+			$StatusCode = 0
+			$Reason = ""
 
-		try {
-			$Resuult = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-			Write-Output -InputObject $Result.Items
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content).Items
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue retrieving the recovery points: $StatusCode $Reason - $($Result.Content)"
+			}
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving the recovery points: $($_.Exception.Message)"
-		}			
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
 	}
 
 	End {
+
 	}
 }
 
@@ -2995,7 +2398,7 @@ Function Get-CEMachineBandwidth {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 10/6/2017
 	#>
 	[CmdletBinding()]
 	Param(
@@ -3023,25 +2426,79 @@ Function Get-CEMachineBandwidth {
 	}
 
 	Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+		$SessionInfo = $null
 
-		if ($ProjectId -eq [System.Guid]::Empty)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session.ToLower())
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
+			{
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
+			}
 
-		[System.String]$Path = "/projects/$ProjectId/machines/$InstanceId/bandwidthThrottling"
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
+			}
 
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-			Write-Output -InputObject ($Result | Select-Object -ExpandProperty bandwidthThrottling)
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/machines/$InstanceId/bandwidthThrottling"
+
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content).BandwidthThrottling
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue retrieving bandwidth throttling setting: $StatusCode $Reason - $($Result.Content)"
+			}
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving bandwidth throttling setting: $($_.Exception.Message)"
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
 	}
 
 	End {
+
 	}
 }
 
@@ -3089,7 +2546,7 @@ Function Set-CEMachineBandwidth {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 10/6/2017
 	#>
 	[CmdletBinding()]
 	Param(
@@ -3124,29 +2581,80 @@ Function Set-CEMachineBandwidth {
 	}
 
 	Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+		$SessionInfo = $null
 
-		if ($ProjectId -eq [System.Guid]::Empty)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session.ToLower())
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
-
-		[System.String]$Uri = "/projects/$ProjectId/machines/$InstanceId/bandwidthThrottling"
-		[System.String]$Body = ConvertTo-Json -InputObject @{bandwidthThrottling = $BandwidthThrottling}
-
-
-		Write-Verbose -Message "Sending updated setting of:`r`n$Body"
-
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Patch -Body $Body -Session $Session -ExpectedResponseCode 200
-
-			if ($PassThru)
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
 			{
-				Write-Output -InputObject ($Result | Select-Object -ExpandProperty bandwidthThrottling)
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
+			}
+
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
+			}
+
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/machines/$InstanceId/bandwidthThrottling"
+			[System.String]$Body = ConvertTo-Json -InputObject @{bandwidthThrottling = $BandwidthThrottling}
+
+			$StatusCode = 0
+			$Reason = ""
+
+			Write-Verbose -Message "Sending updated setting of:`r`n$Body"
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Patch -Body $Body -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				if ($PassThru)
+				{
+					Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content).BandwidthThrottling
+				}
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue retrieving bandwidth throttling setting: $StatusCode $Reason - $($Result.Content)"
 			}
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving bandwidth throttling setting: $($_.Exception.Message)"
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
 	}
 
@@ -3161,43 +2669,19 @@ Function New-CEReplicationConfiguration {
 			Creates a new CE replication configuration.
 
 		.DESCRIPTION
-			This cmdlet is used to create a new CE replication configuration for a specific CE account. If you provide a config object or file, it is important to note that the parameters are extremely case sensitive!
+			This cmdlet is used to create a new CE replication configuration for a specific CE account.
 
-			Use the following formatting for parameter names in a file or config object:
+		.PARAMETER ProxyUrl
+			The full URI for a proxy (schema, username, password, domain, port) if required for the CloudEndure agent. Leave blank to not use a proxy.
 
-			{
-			  "volumeEncryptionKey": "string",
-			  "replicationTags": [
-				{
-				  "key": "string",
-				  "value": "string"
-				}
-			  ],
-			  "disablePublicIp": true,
-			  "subnetHostProject": "string",
-			  "replicationServerType": "string",
-			  "useLowCostDisks": true,
-			  "computeLocationId": "string",
-			  "cloudCredentials": "string",
-			  "subnetId": "string",
-			  "logicalLocationId": "string",
-			  "bandwidthThrottling": 0,
-			  "useDedicatedServer": true,
-			  "zone": "string",
-			  "replicatorSecurityGroupIDs": [
-				"string"
-			  ],
-			  "usePrivateIp": true,
-			  "region": "string",
-			  "id": "string",
-			  "proxyUrl": "string",
-			  "volumeEncryptionAllowed": true,
-			  "objectStorageLocation": "string",
-			  "archivingEnabled": true,
-			  "storageLocationId": "string"
-			}
+		.PARAMETER SubnetId
+			Subnet where replication servers will be created.
 
-			You must also provide all parameters, and none of them can be null.
+		.PARAMETER CloudCredentials
+			The ID for the cloudCredentials object containing the credentials to be used for accessing the target cloud. If this is not specified, the default credentials Id from the session will be used. 
+
+		.PARAMETER UsePrivateIp
+			Should the CloudEndure agent access the replication server using its private IP address. Set this parameter to true to use a VPN, DirectConnect, ExpressRoute, or GCP Carrier Interconnect/Direct Peering.
 
 		.PARAMETER VolumeEncryptionKey
 			AWS only. ARN to private key for volume encryption.
@@ -3205,59 +2689,11 @@ Function New-CEReplicationConfiguration {
 		.PARAMETER ReplicationTags
 			AWS only. Tags that will be applied to every cloud resource created in the CloudEndure staging area.
 
-		.PARAMETER DisablePublicIp
-			When private IP is used, do not allocate public IP for replication server. Defaults to false.
-
 		.PARAMETER SubnetHostProject
 			GCP only. Host project of cross project network subnet.
 
-		.PARAMETER ReplicationServerType
-			The type of the replication server.
-
-		.PARAMETER UseLowCostDisks
-			Specify true to use low cost disks for eplication whenever possible.
-
-		.PARAMETER ComputeLocationId
-			VCENTER only.
-
-		.PARAMETER CloudCredentials
-			The ID for the cloudCredentials object containing the credentials to be used for accessing the target cloud. If this is not specified, the default credentials Id from the session will be used. 
-
-		.PARAMETER SubnetId
-			Subnet where replication servers will be created.
-
-		.PARAMETER LogicalLocationId
-			VCENTER only. vcenter = vmFolder
-
-		.PARAMETER BandwidthThrottling
-			Mbps to use for Data Replication (zero means no throttling).
-
-		.PARAMETER UseDedicatedServer
-			This will dedicate a single Replication Server for each source machine, instead of a single Replication Server for multiple source machines. 
-
-		.PARAMETER Zone
-			GCP and Azure ARM only. The zone to replicate into.
-
 		.PARAMETER ReplicatorSecurityGroupIDs
 			AWS only. The security groups that will be applied to the replication servers.
-		
-		.PARAMETER UsePrivateIp
-			Should the CloudEndure agent access the replication server using its private IP address. Set this parameter to true to use a VPN, DirectConnect, ExpressRoute, or GCP Carrier Interconnect/Direct Peering.
-
-		.PARAMETER ProxyUrl
-			The full URI for a proxy (schema, username, password, domain, port) if required for the CloudEndure agent. Leave blank to not use a proxy.
-
-		.PARAMETER VolumeEncryptionAllowed
-			Specify if volume encryption is allowed.
-
-		.PARAMETER ObjectStorageLocation
-			AWS only. The bucket in AWS to store data.
-
-		.PARAMETER ArchivingEnabled
-			Is archiving enabled.
-
-		.PARAMETER StorageLocationId
-			The storage location id.
 
 		.PARAMETER Config
 			You can provide a replication config with these properties:
@@ -3270,34 +2706,23 @@ Function New-CEReplicationConfiguration {
 				  "value": "string"
 				}
 			  ],
-			  "disablePublicIp": true,
 			  "subnetHostProject": "string",
-			  "replicationServerType": "string",
-			  "useLowCostDisks": true,
-			  "computeLocationId": "string",
-			  "cloudCredentials": "string",
-			  "subnetId": "string",
-			  "logicalLocationId": "string",
-			  "bandwidthThrottling": 0,
-			  "useDedicatedServer": true,
-			  "zone": "string",
 			  "replicatorSecurityGroupIDs": [
 				"string"
 			  ],
 			  "usePrivateIp": true,
-			  "region": "string",
-			  "id": "string",
 			  "proxyUrl": "string",
-			  "volumeEncryptionAllowed": true,
-			  "objectStorageLocation": "string",
-			  "archivingEnabled": true,
-			  "storageLocationId": "string"
+			  "cloudCredentials": "string",
+			  "subnetId": "string"
 			}
 
             You cannot specify an updated Source as part of the config file, you must specify that separately.
 
-		.PARAMETER Path
-			The path to the replication configuration json file.
+		.PARAMETER Source
+			The source identifier for replication. 
+
+		.PARAMETER Target
+			The destination indentifier for replication.			
 
 		.PARAMETER Session
             The session identifier provided by New-CESession. If this is not specified, the default session information will be used.
@@ -3328,105 +2753,51 @@ Function New-CEReplicationConfiguration {
 				  "value": "string"
 				}
 			  ],
-			  "disablePublicIp": true,
 			  "subnetHostProject": "string",
-			  "replicationServerType": "string",
-			  "useLowCostDisks": true,
-			  "computeLocationId": "string",
-			  "cloudCredentials": "string",
-			  "subnetId": "string",
-			  "logicalLocationId": "string",
-			  "bandwidthThrottling": 0,
-			  "useDedicatedServer": true,
-			  "zone": "string",
 			  "replicatorSecurityGroupIDs": [
 				"string"
 			  ],
 			  "usePrivateIp": true,
 			  "region": "string",
-			  "id": "string",
 			  "proxyUrl": "string",
-			  "volumeEncryptionAllowed": true,
-			  "objectStorageLocation": "string",
-			  "archivingEnabled": true,
-			  "storageLocationId": "string"
+			  "cloudCredentials": "string",
+			  "subnetId": "string",
+			  "id": "string"
 			}
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 10/6/2017
     #>
-    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH", DefaultParameterSetName = "__AllParameterSets")]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
 	[OutputType([PSCustomObject])]
     Param(
 		[Parameter(ParameterSetName = "Config", Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
 		[ValidateNotNull()]
 		[System.Collections.Hashtable]$Config = @{},
 
-		[Parameter(ParameterSetName = "Path", Mandatory = $true)]
-		[ValidateScript({
-			Test-Path -Path $_
-		})]
-		[System.String]$Path,
-
-		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNull()]
-		[System.Collections.Hashtable[]]$ReplicationTags = @(),
-
-		[Parameter()]
-		[System.Boolean]$DisablePublicIp = $false,
-
-		[Parameter(ParameterSetName = "GCP")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$SubnetHostProject = [System.String]::Empty,
-
-		[Parameter()]
-		[System.Boolean]$UseLowCostDisks = $false,
-
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ComputeLocationId = [System.String]::Empty,
-
 		[Parameter()]
 		[ValidateNotNull()]
 		[System.Guid]$CloudCredentials = [System.Guid]::Empty,
 
-		[Parameter(ParameterSetName = "VCENTER")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$LogicalLocationId = [System.String]::Empty,
-
-		[Parameter()]
-		[ValidateRange(0, [System.Int32]::MaxValue)]
-		[System.Int32]$BandwidthThrottling = 0,
-
-		[Parameter()]
-		[System.Boolean]$UseDedicatedServer = $false,
-
-		[Parameter(ParameterSetName = "GCP")]
-		[Parameter(ParameterSetName = "Azure")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Zone = [System.String]::Empty,
-
-		[Parameter()]
-		[System.Boolean]$UsePrivateIp = $false,
-
         [Parameter()]
         [ValidateNotNullOrEmpty()]
-        [System.String]$ProxyUrl = [System.String]::Empty,
+        [System.String]$ProxyUrl,
 
-		[Parameter()]
-		[System.Boolean]$VolumeEncryptionAllowed = $false,
+        [Parameter()]
+        [System.Boolean]$UsePrivateIp = $false,
+
+        [Parameter(ParameterSetName = "AWS")]
+		[ValidateNotNullOrEmpty()]
+        [System.String]$VolumeEncryptionKey,
 
 		[Parameter(ParameterSetName = "AWS")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$ObjectStorageLocation = [System.String]::Empty,
+		[ValidateNotNull()]
+		[System.Collections.Hashtable]$ReplicationTags,
 
-		[Parameter()]
-		[System.Boolean]$ArchivingEnabled = $false,
-
-		[Parameter()]
+		[Parameter(ParameterSetName = "GCP")]
 		[ValidateNotNullOrEmpty()]
-		[System.String]$StorageLocationId = [System.String]::Empty,
+		[System.String]$SubnetHostProject,
 
 		[Parameter()]
 		[ValidateScript({
@@ -3450,125 +2821,112 @@ Function New-CEReplicationConfiguration {
 
 	DynamicParam {
 
-		# Create the dictionary 
-        [System.Management.Automation.RuntimeDefinedParameterDictionary]$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+			$DynSessionInfo = $script:Sessions.Get_Item($Session)
+			$DynSession = $Session
+		}
+		else {
+			$DynSessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$DynSession = $DynSessionInfo.User.Username
+		}
 
-		$DynSplat = @{}
-		$ProjectSplat = @{}
-		$SessionSplat = @{}
-
-		if (-not [System.String]::IsNullOrEmpty($Session)) {
-			$DynSplat.Add("Session", $Session)
-			$ProjectSplat.Add("Session", $Session)
-			$SessionSplat.Add("Session", $Session)
+		$DynSplat = @{
+			"Session" = $DynSession
 		}
 
 		if ($ProjectId -ne $null -and $ProjectId -ne [System.Guid]::Empty)
 		{
-			$ProjectSplat.Add("Id", $ProjectId)
 			$DynSplat.Add("ProjectId", $ProjectId)
 		}
 
-		$Project = Get-CEProject @ProjectSplat
+		[PSCustomObject[]]$CERegions = Get-CECloudRegion @DynSplat 
 
-		if ($CloudCredentials -ne $null -and $CloudCredentials -ne [System.Guid]::Empty)
-		{
-			$DynSplat.Add("CloudCredentials", $CloudCredentials)
-		}
-		else
-		{
-			$DynSplat.Add("CloudCredentials", $Project.cloudCredentialsIDs[0])
-		}
-	
-		$Regions = Get-CECloudRegion @DynSplat
-		$TargetRegionsSet = $Regions | Select-Object -ExpandProperty Id
-		New-DynamicParameter -Name "TargetRegion" -Type ([System.String]) -ValidateSet $TargetRegionsSet -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+        # Create the dictionary 
+		$RuntimeParameterDictionary = New-Object -TypeName System.Management.Automation.RuntimeDefinedParameterDictionary
 
-		$SourceRegionsSet = $Regions | Select-Object -ExpandProperty Id
-		$SourceRegionsSet += "GENERIC"
-		New-DynamicParameter -Name "SourceRegion" -Type ([System.String]) -ValidateSet $SourceRegionsSet -Mandatory -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+		#region Source - The source isn't defined as part of the replication config
 
-		# Only generate the rest of the dynamic parameters if a replication config wasn't specified
-		if (-not $PSBoundParameters.ContainsKey("Config") -and -not $PSBoundParameters.ContainsKey("Path") -and $Config -ne @{})
+		New-DynamicParameter -Name "Source" -Type ([System.String]) -ValidateSet (($CERegions | Select-Object -ExpandProperty Name) + "Generic") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+		#endregion
+		
+		# If a config wasn't provided, add target specific parameters
+		if ($Config -eq $null -or $Config -eq @{})
 		{
+			#region Target
+
+			[System.Collections.ArrayList]$TargetSet = $CERegions | Select-Object -ExpandProperty Name
+			$TargetSet.Remove("Generic")
+
+			New-DynamicParameter -Name "Target" -Type ([System.String]) -ValidateSet $TargetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+			#endregion
+
+			# Import the unbound parameter checking code from HostUtilities
 			$Type = Import-UnboundParameterCode -PassThru
+			[System.String]$TargetRegionName = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "Target", -1))
 
-			$TargetRegion = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "TargetRegion", -1))
-
-			if (-not [System.String]::IsNullOrEmpty($TargetRegion))
+			if (-not [System.String]::IsNullOrEmpty($TargetRegionName))
 			{
-				$TargetCloudRegion = Get-CECloudRegion -Id $TargetRegion @DynSplat
+				$Region = $CERegions | Where-Object {$_.Name -ieq $TargetRegionName}
 
-				if ($TargetCloudRegion.Subnets.Length -gt 0)
+				if ($Region -ne $null)
 				{
-					$SubnetSet = $TargetCloudRegion.Subnets | Where-Object {$_.SubnetId -ne $null } | Select-Object -ExpandProperty SubnetId
-					# Add default to allow user to specify the default subnet for the configured region
-					$SubnetSet += "Default"
+					$TargetRegion = $Region | Select-Object -First 1 
+					$RegionSubnets = $TargetRegion | Select-Object -ExpandProperty Subnets
+
+					#region SubnetId					
+
+					# Allow user to specify either the long name or the subnet id in the parameter
+					[System.String[]]$SubnetSet = $TargetRegion | Select-Object -First 1 -ExpandProperty Subnets | Select-Object -ExpandProperty Name
+					$SubnetSet += $CERegions | Where-Object {$_.Id -ieq $TargetRegionId } | Select-Object -First 1 -ExpandProperty Subnets | Select-Object -ExpandProperty SubnetId
 
 					New-DynamicParameter -Name "SubnetId" -Type ([System.String]) -ValidateSet $SubnetSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-				}
-			}
 
-			$CloudName = Get-CECloud -Id $Project.targetCloudId @SessionSplat | Select-Object -ExpandProperty Name
+					#endregion
 
-			switch ($CloudName)
-			{
-				"AWS" {
-					# Creds may not have access to opt-in regions that get listed
-					if (Get-Member -InputObject $TargetCloudRegion -MemberType Properties -Name "VolumeEncryptionKeys")
+					[System.String]$Cloud = $CERegions | Where-Object {$_.Id -ieq $TargetRegionId} | Select-Object -First 1 -ExpandProperty Cloud
+
+					# ReplicatorSecurityGroupIDs is only an option for AWS as is VolumeEncryptionKey
+					if ($Cloud -ieq "AWS")
 					{
-						$KeySet = $TargetCloudRegion | Select-Object -ExpandProperty VolumeEncryptionKeys | Where-Object {$_.KeyArn -ne $null} | Select-Object -ExpandProperty KeyArn
-						$KeySet += "Default"
+						#region KMS
 
-						New-DynamicParameter -Name "VolumeEncryptionKey" -Type ([System.String]) -ValidateSet $KeySet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
+						$KMSSet = $TargetRegion | Select-Object -ExpandProperty VolumeEncryptionKeys | Where-Object {$_.KeyArn -ne $null} | Select-Object -ExpandProperty KeyArn
+						$KMSSet += "Default"
 
-					[System.String]$Key = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "SubnetId", -1))
+						New-DynamicParameter -Name "VolumeEncryptionKey" -ValidateSet $KMSSet -ParameterSets @("AWS") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
 
-					# The target region may not have been specified yet
-					if ($TargetCloudRegion -ne $null)
-					{
-						$Subnet = $TargetCloudRegion.Subnets | Where-Object {$_.SubnetId -ieq $Key} | Select-Object -First 1 -ErrorAction SilentlyContinue
-	
-						# If the subnet is "Default", you won't be able to select a security group, so a new one will be created
-						# Make sure there are security groups in this region and that we found a matching one
-						# Subnet will be null if user selected "Default"
-						if ($TargetCloudRegion.SecurityGroups -ne $null -and $TargetCloudRegion.SecurityGroups.Length -gt 0 -and $Subnet -ne $null -and $Subnet.Name -ine "Default")
+						#endregion
+
+						[System.String]$SubnetId = $Type.GetMethod("GetUnboundParameterValue").MakeGenericMethod([System.String]).Invoke($Type, @($PSCmdlet, "SubnetId", -1))
+
+						if (-not [System.String]::IsNullOrEmpty($SubnetId))
 						{
-							# Get the network Id based on the selected subnet so we can get the right security groups as options
-							[System.String[]]$SGSet = $TargetCloudRegion.SecurityGroups | Where-Object {$_.NetworkId -ieq $Subnet.NetworkId} | Select-Object -ExpandProperty SecurityGroupId
+							# Since we allowed the user to specify either the subnetid or the long name, we need to check which one
+							# was specified
 
-							New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String[]]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+							$VpcId = $RegionSubnets | Where-Object {$_.Name -ieq $SubnetId -or $_.Id -ieq $SubnetId} | Select-Object -ExpandProperty NetworkId -ErrorAction SilentlyContinue
+
+							# If we found the subnet, and we found the VPC, populate security groups
+							# If it wasn't found, either the subnet provided was "Default" or not a recognized value
+							if (-not [System.String]::IsNullOrEmpty($VpcId))
+							{
+								#region SecurityGroups
+
+								$SGSet = $TargetRegion | Select-Object -ExpandProperty SecurityGroups | Where-Object {$_.NetworkId -ieq $VpcId} | Select-Object -ExpandProperty SecurityGroupId
+								$SGSet += [System.String]::Empty
+
+								New-DynamicParameter -Name "ReplicatorSecurityGroupIDs" -Type ([System.String]) -ParameterSets @("AWS") -ValidateSet $SGSet -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
+
+								#endregion
+							}
 						}
 					}
-
-					break
-				}
-				"GCP" {
-					if ($TargetCloudRegion -ne $null -and $TargetCloudRegion.Zones.Length -gt 0)
-					{
-						$ZoneSet = $TargetCloudRegion.Zones
-						# Add default to allow user to specify the default zone for the configured region
-						$ZoneSet += "Default"
-
-						New-DynamicParameter -Name "Zone" -Type ([System.String]) -ValidateSet $ZoneSet -ParameterSets @("GCP") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
-					break
-				}
-				"Azure" {
-					if ($TargetCloudRegion -ne $null -and $TargetCloudRegion.Zones.Length -gt 0)
-					{
-						$ZoneSet = $TargetCloudRegion.Zones
-						# Add default to allow user to specify the default zone for the configured region
-						$ZoneSet += "Default"
-
-						New-DynamicParameter -Name "Zone" -Type ([System.String]) -ValidateSet $ZoneSet -ParameterSets @("Azure") -RuntimeParameterDictionary $RuntimeParameterDictionary | Out-Null
-					}
-					break
 				}
 			}
 		}
-
+        
         return $RuntimeParameterDictionary
 	}
 
@@ -3576,130 +2934,271 @@ Function New-CEReplicationConfiguration {
 	}
 
 	Process {		
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
-
-		$Body = ""
-		$ReplicationObject = [PSCustomObject]@{}
+		# Get all of the dynamic params into variables
+		[System.String]$Target = $PSBoundParameters["Target"]
+		[System.String]$Source = $PSBoundParameters["Source"]
 		
-		switch ($PSCmdlet.ParameterSetName)
+		# Make sure a target or destination was specified
+		if ([System.String]::IsNullOrEmpty($Source) -and [System.String]::IsNullOrEmpty($Target) -and [System.String]::IsNullOrEmpty($Config["region"]))
 		{
-			"Path" {
-				$ReplicationObject = Get-Content -Path $Path -Raw | Convert-FromJson
-				break
+			throw "A new source and/or target must be specified to create a new replication configuration."
+		}
+
+		$SessionInfo = $null
+
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+			$SessionInfo = $script:Sessions.Get_Item($Session)
+		}
+		else {
+			$SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+		}
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.Collections.Hashtable]$SessSplat = @{
+				"Session" = $Session
 			}
-			"Config" {
-				$ReplicationObject = [PSCustomObject]$Config
-				break
+
+			if ($ProjectId -ne [System.Guid]::Empty)
+			{
+				$SessSplat.Add("ProjectId", $ProjectId)
 			}
-			default {
-				# This is going to take all of the parameters supplied, put them into a hash table, and then create a json
-				# document that is the blueprint
-				$Config = Convert-ParametersToHashtable -Parameters (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters `
-					-ParameterSetName $PSCmdlet.ParameterSetName `
-					-RuntimeParameterDictionary $RuntimeParameterDictionary `
-					-BoundParameters $PSBoundParameters `
-					-IncludeDefaults ` # All parameters have been given a default for this cmdlet
-					-FunctionName $PSCmdlet.MyInvocation.InvocationName
 
-				$ReplicationObject = [PSCustomObject]$Config
-				break
+			[PSCustomObject[]]$CERegions = Get-CECloudRegion @SessSplat 
+
+			if (-not $PSBoundParameters.ContainsKey("CloudCredentials"))
+			{
+				$CloudCredentials = $SessionInfo.DefaultCloudCredentials
 			}
-		}
 
-		if ($ProjectId -eq [System.Guid]::Empty)
-		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
+			# This is the default set of properties we can specify for a new replication config
+			$DefaultConfig = @{
+				"cloudCredentials" = $CloudCredentials;
+                "region" = "";
+                "subnetId" = "";
+				"subnetHostProject" = "";
+                "replicatorSecurityGroupIDs" = @();
+                "volumeEncryptionKey" = "";
+                "replicationTags" = @();
+                "usePrivateIp" = $false;
+                "proxyUrl" = ""
+            }
+                    
+			# If a config hashtable wasn't provided, build one for the parameter set being used
+			if ($PSCmdlet.ParameterSetName -ne "Config")
+			{
+				# Convert only the non-common parameters specified into a hashtable
+				$Params = @{}
 
-		$Splat = @{}
+				foreach ($Item in (Get-Command -Name $PSCmdlet.MyInvocation.InvocationName).Parameters.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Key)})
+                {
+					[System.String[]]$Sets = $Item.Value.ParameterSets.GetEnumerator() | Select-Object -ExpandProperty Key
+                    $Params.Add($Item.Key, $Sets)
+                }
 
-		if (-not [System.String]::IsNullOrEmpty($Session))
-		{
-			$Splat.Add("Session", $Session)
-		}
+                $RuntimeParameterDictionary.GetEnumerator() | Where-Object {-not $script:CommonParams.Contains($_.Name)} | ForEach-Object {
+                    [System.Management.Automation.RuntimeDefinedParameter]$Param = $_.Value 
 
-		$Project = Get-CEProject -Id $ProjectId @Splat
+                    if ($Param.IsSet -and -not $Params.ContainsKey($Param.Name))
+                    {
+						[System.String[]]$ParameterSets = $Param.Attributes | Where-Object {$_ -is [System.Management.Automation.PARAMETERAttribute] } | Select-Object -ExpandProperty ParameterSetName
+						$Params.Add($Param.Name, $ParameterSets)
+                    }
+                }
 
-		if (-not (Get-Member -InputObject $ReplicationObject -MemberType Properties -Name "cloudCredentials"))
-		{
-			$ReplicationObject | Add-Member -MemberType NoteProperty -Name "cloudCredentials" -Value $Project.CloudCredentialsIDs[0]
-		}
+				$Config = @{}
 
-		# It may be possible this dynamic param was never specified
-		if (-not (Get-Member -InputObject $ReplicationObject -MemberType Properties -Name "replicatorSecurityGroupIDs"))
-		{
-			$ReplicationObject | Add-Member -MemberType NoteProperty -Name "replicatorSecurityGroupIDs" -Value @()	
-		}
+				# Get the parameters for the command
+				foreach ($Item in $Params.GetEnumerator())
+                {
+					# If the parameter is part of the Individual parameter set or is a parameter only part of __AllParameterSets
+					if ($Item.Value.Contains($PSCmdlet.ParameterSetName) -or ($Item.Value.Length -eq 1 -and $Item.Value.Contains($script:AllParameterSets)))
+					{
+						# Check to see if it was supplied by the user
+						if ($PSBoundParameters.ContainsKey($Item.Key))
+						{
+							# If it was, add it to the config
+							
+							if ($Item.Key -ieq "ReplicationTags")
+							{
+								[System.Collections.Hashtable[]]$TagsToAdd = @()
+								# We need to convert the hashtable to the tag key/value structure
+								$PSBoundParameters[$Item.Key].GetEnumerator() | ForEach-Object {
+									$TagsToAdd += @{"key" = $_.Key; "value" = $_.Value}
+								}
 
-		$SecurityGroupIds = $ReplicationObject.ReplicatorSecurityGroupIDs
+								$Config.Add("replicationTags", $TagsToAdd)
+							}
+                            # The friendly name or the id of the subnet was provided at the command line
+                            elseif ($Item.Key -ieq "SubnetId") 
+							{
+								[System.String]$SubnetId = $CERegions | 
+									Where-Object {$_.Name -ieq $Target} | 
+									Select-Object -ExpandProperty Subnets | 
+									Where-Object {$_.Name -ieq $PSBoundParameters["SubnetId"] -or $_.Id -ieq $PSBoundParameters["SubnetId"]} | 
+									Select-Object -First 1 -ExpandProperty Id
 
-		if ($ReplicationObject.CloudCredentials -eq [System.Guid]::Empty)
-		{
-			$ReplicationObject.CloudCredentials = $Project.CloudCredentialsIDs[0]
-		}
+								if (-not [System.String]::IsNullOrEmpty($SubnetId))
+								{
+									$Config.Add("subnetId", $SubnetId)
+								}
+							}
+							elseif ($Item.Key -ieq "Source")
+							{
+								$SourceId = (($CERegions | Select-Object -Property Name,Id) + [PSCustomObject]@{"Name" = "Generic"; "Id" = $script:CloudIds["Generic"]}) | Where-Object {$_.Name -ieq $PSBoundParameters[$Item.Key]} | Select-Object -ExpandProperty Id -First 1
+								$Config.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $SourceId)
+							}
+							elseif ($Item.Key -ieq "Target")
+							{
+								$TargetId = $CERegions | Where-Object {$_.Name -ieq $PSBoundParameters[$Item.Key]} | Select-Object -First 1 -ExpandProperty Id
+								$Config.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $TargetId)
+							}
+							else 
+							{
+								$Config.Add($Item.Key.Substring(0, 1).ToLower() + $Item.Key.Substring(1), $PSBoundParameters[$Item.Key])
+							}
+						}
+					}
+				}
+			}
 
-		if ($ReplicationObject.SubnetId -ieq "Default")
-		{
-			$ReplicationObject.SubnetId = ""
-		}
+			# Merge the updated parameters specified with the default settings
+			# This ensures our request has all required properties, even if some are blank
+            $Config = Merge-Hashtables -Source $DefaultConfig -Update $Config
 
-		$ReplicationObject = $ReplicationObject | Select-Object -Property * -ExcludeProperty "TargetRegion", "SourceRegion", "ReplicatorSecurityGroupIDs"
+			# We need the project to see the original source
+            [System.Collections.Hashtable]$CurrentProject = Get-CEProject @SessSplat | ConvertTo-Hashtable
 
-		# Must specify the region for the target since this won't be set yet in the project
-		# If the project has a target region, it's because it has an associated replication
-		# configuration, which means we wouldn't be creating a new one
-		$ReplicationObject | Add-Member -MemberType NoteProperty -Name "region" -Value $PSBoundParameters["TargetRegion"]
+			[System.Collections.Hashtable]$ProjectSplat = @{}
 
-		$ReplicationObject | Add-Member -MemberType NoteProperty -Name "replicatorSecurityGroupIDs" -Value $SecurityGroupIds
-		
-		$Body = ConvertTo-Json -InputObject $ReplicationObject
-		Write-Verbose -Message "Sending new config:`n$Body"
+			# We need the current replication config to see the original target
+            [System.Collections.Hashtable]$CurrentConfig = Get-CEReplicationConfiguration -Id $CurrentProject["replicationConfiguration"] @SessSplat | ConvertTo-Hashtable
 
-		[System.String]$UrlPath = "/projects/$ProjectId/replicationConfigurations"
+			# Build the confirmation messages with warnings about updates to source and destination
+            $ConfirmMessage = "The action you are about to perform is destructive!"
 
-		$ErrorHandling = {
-			Param($StatusCode, $Content, $ErrorMessage)
+            if (-not [System.String]::ISNullOrEmpty($Source))
+            {        
+				$OriginalSrc = $CurrentProject["source"]
+                $OriginalSource = ($CERegions + [PSCustomObject]@{"Name" = "Generic"; "Id" = $script:CloudIds["Generic"]}) | Where-Object {$_.Id -ieq $OriginalSrc } | Select-Object -First 1 -ExpandProperty Name
+                    
+                # Do this second so we don't overwrite the original source for the confirm message
+				# This will set the updated source for the PATCH request
+				$ProjectSplat.Add("source", ($CERegions | Where-Object {$_.Name -ieq $Source} | Select-Object -First 1 -ExpandProperty Id))
+
+                $ConfirmMessage += "`r`n`r`nChanging your Live Migration Source from $OriginalSource to $Source will cause all current instances to be disconnected from CloudEndure: you will need to reinstall the CloudEndure Agent on all the instances and data replication will restart from zero."
+            }
+
+            if (-not [System.String]::IsNullOrEmpty($Target) -or -not [System.String]::IsNullOrEmpty($Config["region"]))
+            {
+				# If a config with a region wasn't specified, get it from the Target specified
+				# The RegionMapping table was built during the dynamic params evaluation
+				if ([System.String]::IsNullOrEmpty($Config["region"]))
+				{
+					$Config["region"] = $CERegions | Where-Object {$_.Name -ieq $Target} | Select-Object -First 1 -ExpandProperty Id
+				}
+
+                $OriginalTarget = $CERegions | Where-Object {$_.Id -ieq $CurrentConfig["region"] } | Select-Object -First 1 -ExpandProperty Name
+
+                $ConfirmMessage += "`r`n`r`nChanging your Live Migration Target from $OriginalTarget to $Target will cause all current instances to be disconnected from CloudEndure: you will need to reinstall the CloudEndure Agent on all the instances and data replication will restart from zero."
+            }
+
+            $ConfirmMessage += "`r`n`r`nAre you sure you want to continue?"
+			$WhatIfDescription = "New replication configuration created: $(ConvertTo-Json -InputObject $Config)"
+			$ConfirmCaption = "Create New Replication Configuration"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				if ($ProjectId -eq [System.Guid]::Empty)
+				{
+					$ProjectId = $SessionInfo.ProjectId
+				}
+
+                # Send the post request to create a new replication configuration if a new target region was specified
+                if (-not [System.String]::IsNullOrEmpty($Config["region"]))
+                {
+					if ($Config["region"] -ne $CurrentConfig["region"] )
+					{
+						Write-Verbose -Message "Sending config $(ConvertTo-Json $Config)"
+						[System.String]$PostUri = "$($SessionInfo.Url)/projects/$ProjectId/replicationConfigurations"
+						
+						$StatusCode = 0
+						$Reason = ""
+
+						try {
+							[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$PostResult = Invoke-WebRequest -Uri $PostUri -Method Post -Body (ConvertTo-Json -InputObject $Config) -ContentType "application/json" -WebSession $SessionInfo.Session -ErrorAction Stop
+							$StatusCode = $PostResult.StatusCode
+							$Reason = $PostResult.StatusDescription
+						}
+						catch [System.Net.WebException] {
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
 			
-			switch ($StatusCode) {
-				201 {	
-					Write-Verbose -Message $Content
-					Write-Output -InputObject (ConvertFrom-Json -InputObject $Content)
-					break
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
+						}
+						catch [Exception]  {
+							$Reason = $_.Exception.Message
+						}
+
+						switch ($StatusCode) {
+							201 {
+								
+								Write-Verbose -Message $PostResult.Content
+								# Update the project with the new replication configuration Id to supply in the PATCH request
+								$ProjectSplat.Add("replicationConfiguration", (ConvertFrom-Json -InputObject $PostResult.Content).Id)
+								break
+							}
+							400 {
+								throw "There is a conflict in the replication configuration. This can be due to: subnet ID which does not exist in the region, security groups that are not in the same network as the subnet, etc."
+							}
+							default {
+								# Make sure we don't send the patch request if this failed
+								throw "Failed to create new Replication Configuration with error: $StatusCode $Reason - $($PostResult.Content)"
+							}
+						}
+					}
+					else
+					{
+						Write-Warning -Message "The specified target region $OriginalTarget is the same as the current region, no update made."
+					}
+                }
+
+				# Make sure a new source that was different than the old one was specified or that the target region is new meaning that the replication configuration
+				# id has changed
+				if ((-not [System.String]::IsNullOrEmpty($Source) -and $ProjectSplat["source"] -ne $OriginalSrc) -or $Config["region"] -ne $CurrentConfig["region"])
+				{					
+					Write-Verbose -Message "Sending updated project $(ConvertTo-Json $ProjectSplat)"
+					
+					$UpdatedProject = Set-CEProject -ProjectId $ProjectId -Config $ProjectSplat -PassThru @SessSplat
+					Write-Verbose -Message (ConvertTo-Json $UpdatedProject)
+
 				}
-				400 {
-					throw "There is a conflict in the replication configuration. This can be due to: subnet ID which does not exist in the region, security groups that are not in the same network as the subnet, etc."
+				else
+				{
+					Write-Warning -Message "Either no new source specified or no new target specified."
 				}
-				default {
-					# Make sure we don't send the patch request if this failed
-					throw "Failed to create new Replication Configuration with error: $ErrorMessage"
-				}
-			}
+            }
 		}
-
-		$Result = Invoke-CERequest -Path $UrlPath -Method Post -Body $Body -Session $Session -ErrorHandling $ErrorHandling
-
-		if ($PassThru)
+		else 
 		{
-			Write-Output -InputObject $Result
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
-
-		# After creating the new replication configuration, we need to patch the project
-		# with the replication configuration id and source region id
-
-		$UrlPath = "/projects/$ProjectId"
-		$ProjectContent = @{replicationConfiguration = $Result.Id; sourceRegion = $PSBoundParameters["SourceRegion"] }
-
-		if ($ProjectContent["sourceRegion"] -ieq "GENERIC")
-		{
-			$AccountInfo = Get-CEAccountExtendedInfo @Splat 
-			$ProjectContent["sourceRegion"] = $AccountInfo.GenericRegion.Id
-		}
-
-		$ProjectBody = ConvertTo-Json -InputObject $ProjectContent
-
-		Write-Verbose -Message "Patching project $ProjectId`:`n$ProjectBody"
-
-		$Result = Invoke-CERequest -Path $UrlPath -Method Patch -Body $ProjectBody -Session $Session -ExpectedResponseCode 200
 	}
 
 	End {
@@ -3750,39 +3249,27 @@ Function Get-CEReplicationConfiguration {
 					  "value": "string"
 					}
 				  ],
-				  "disablePublicIp": true,
 				  "subnetHostProject": "string",
-				  "replicationServerType": "string",
-				  "useLowCostDisks": true,
-				  "computeLocationId": "string",
-				  "cloudCredentials": "string",
-				  "subnetId": "string",
-				  "logicalLocationId": "string",
-				  "bandwidthThrottling": 0,
-				  "useDedicatedServer": true,
-				  "zone": "string",
 				  "replicatorSecurityGroupIDs": [
 					"string"
 				  ],
 				  "usePrivateIp": true,
 				  "region": "string",
-				  "id": "string",
 				  "proxyUrl": "string",
-				  "volumeEncryptionAllowed": true,
-				  "objectStorageLocation": "string",
-				  "archivingEnabled": true,
-				  "storageLocationId": "string"
+				  "cloudCredentials": "string",
+				  "subnetId": "string",
+				  "id": "string"
 				}
 			]
 			
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 10/6/2017
     #>
     [CmdletBinding(DefaultParameterSetName = "List")]
     [OutputType([PSCustomObject], [PSCustomObject[]])]
     Param(
-		[Parameter(ValueFromPipeline = $true, Mandatory = $true, ParameterSetName="GetById")]
+		[Parameter(ValueFromPipeline = $true, Mandatory = $true, ParameterSetName="Get")]
 		[ValidateScript({
 			$_ -ne [System.Guid]::Empty
 		})]
@@ -3814,72 +3301,186 @@ Function Get-CEReplicationConfiguration {
     }
 
     Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+        $SessionInfo = $null
 
-		if ($ProjectId -eq [System.Guid]::Empty)
-		{
-			$ProjectId = $SessionInfo["DefaultProjectId"]
-		}
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
 
-		[System.String]$UrlPath = "/projects/$ProjectId/replicationConfigurations"
-
-		[System.Int32]$ResultCount = 0
-		[System.Boolean]$Found = $false
-
-		do {
-			[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
-			[System.String]$TempUri = "$UrlPath$QueryString"
-
-			Write-Verbose -Message "Querying replication configurations from $Offset to $($Offset + $Limit)."
-
-			try {
-				$Result = Invoke-CERequest -Path $TempUri -Method Get -Session $Session -ExpectedResponseCode 200
-			}
-			catch [Exception] {
-				throw "There was an issue listing the replication configurations: $($_.Exception.Message)"
-			}
-
-			[PSCustomObject[]]$Content = $Result.Items
-			$ResultCount = $Result.Items.Length
-
-			switch -wildcard ($PSCmdlet.ParameterSetName)
+		if ($SessionInfo -ne $null) 
+		{	
+			if ($ProjectId -eq [System.Guid]::Empty)
 			{
-				"Get*" {
+				$ProjectId = $SessionInfo.ProjectId
+			}
 
-					$Filter = {$_.Id -ieq $Id.ToString()}
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/replicationConfigurations"
 
-					$ReplConfig = $Content | Where-Object $Filter
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					# This REST API doesn't support supplying the Id as part of the URL
 
-					if ($ReplConfig -ne $null)
+					$Offset = 0
+					$Limit = 1500
+
+					[System.Int32]$ResultCount = 0
+					[System.Boolean]$Found = $false
+					$ReplConfig = $null
+
+					# Go until the results returned are less than the specified limit or the loop
+					# breaks when the config is found
+					do
 					{
-						Write-Output -InputObject ([PSCustomObject]($ReplConfig | Select-Object -First 1))
-						$Found = $true
-						break
-					}
-					else
+						Write-Verbose -Message "Querying replication configurations from $Offset to $($Offset + $Limit)."
+
+						[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
+						[System.String]$TempUri = "$Uri$QueryString"
+						
+						$StatusCode = 0
+						$Reason = ""
+
+						try {
+							[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $TempUri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+							$StatusCode = $Result.StatusCode
+							$Reason = $Result.StatusDescription
+						}
+						catch [System.Net.WebException] {
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
+						}
+						catch [Exception]  {
+							$Reason = $_.Exception.Message
+						}
+
+						if ($StatusCode -eq 200)
+						{
+							[PSCustomObject[]]$Content = ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+							$ResultCount = $Content.Length
+
+							$ReplConfig = $Content | Where-Object {$_.Id -ieq $Id.ToString()}
+
+							if ($ReplConfig -ne $null)
+							{
+								Write-Output -InputObject ([PSCustomObject]($ReplConfig | Select-Object -First 1))
+								$Found = $true
+								break
+							}
+							else
+							{
+								$Offset += $Limit
+							}
+						}
+						else
+						{
+							Write-Warning -Message "There was an issue retrieving replication configurations: $StatusCode $Reason - $($Result.Content)"
+							# Break out of the loop
+							break
+						}
+					} while ($ResultCount -ge $Limit)
+
+					if (-not $Found)
 					{
-						$Offset += $Limit
+						throw "The replication configuration with Id $Id was not found."
 					}
 
 					break
 				}
 				"List" {
-					Write-Output -InputObject $Content
-					$ResultCount = $Limit - 1 # Make sure we break the do loop
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+
+					$StatusCode = 0
+					$Reason = ""
+
+					try {
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+						$StatusCode = $Result.StatusCode
+						$Reason = $Result.StatusDescription
+					}
+					catch [System.Net.WebException] {
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
+					}
+					catch [Exception]  {
+						$Reason = $_.Exception.Message
+					}
+
+					if ($StatusCode -eq 200)
+					{
+						Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+					}
+					else
+					{
+						Write-Warning -Message "There was an issue retrieving the replication configurations: $StatusCode $Reason - $($Result.Content)"
+					}
+
 					break
 				}
 				default {
-					throw "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
 				}
 			}
-
-		} while ($ResultCount -ge $Limit)
-
-		if ($PSCmdlet.ParameterSetName -like "Get*" -and -not $Found)
-		{
-			throw "The replication configuration with Id $Id was not found."
 		}
-	}
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
+    }
 
     End {
     }
@@ -4329,7 +3930,7 @@ Function Remove-CEReplicationConfiguration {
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 10/6/2017
 	#>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
 	[OutputType([PSCustomObject])]
@@ -4362,32 +3963,76 @@ Function Remove-CEReplicationConfiguration {
     }
 
     Process {
-        $SessionInfo = Get-CESessionOrDefault -Session $Session
+        $SessionInfo = $null
 
-		if ($ProjectId -eq [System.Guid]::Empty)
-		{
-			$ProjectId = $SessionInfo.DefaultProjectId
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+			$SessionInfo = $script:Sessions.Get_Item($Session)
+		}
+		else {
+			$SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
 		}
 
-        [System.String]$Uri = "/projects/$ProjectId/replicationConfigurations/$($Id.ToString())"
-
-		$ConfirmMessage = "You are about to remove replication configuration $Id."
-		$WhatIfDescription = "Removed replication configuration $Id"
-		$ConfirmCaption = "Delete CE Replication Configuration"
-		
-		if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+		if ($SessionInfo -ne $null) 
 		{
-			try {
-				$Result = Invoke-CERequest -Path $UrlPath -Method Delete -Session $Session -ExpectedResponseCode 204
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
+			}
+
+            [System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/replicationConfigurations"
+            $Body = @{"id" = $Id.ToString()}
+
+			$ConfirmMessage = "You are about to remove replication configuration $Id."
+			$WhatIfDescription = "Removed replication configuration $Id"
+			$ConfirmCaption = "Delete CE Replication Configuration"
+			
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				$StatusCode = 0
+				$Reason = ""
+
+				try {
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Delete -Body (ConvertTo-Json -InputObject $Body) -WebSession $SessionInfo.Session -ErrorAction Stop
+					$StatusCode = $Result.StatusCode
+					$Reason = $Result.StatusDescription
+				}
+				catch [System.Net.WebException] {
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
+				}
+				catch [Exception]  {
+					$Reason = $_.Exception.Message
+				}
+				
+				Write-Verbose -Message "$StatusCode : $Reason"
 
 				if ($PassThru)
 				{
-					Write-Output -InputObject $Result
+					Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
 				}
 			}
-			catch [Exception] {
-				throw $_.Exception
-			}
+        }
+        else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
     }
 
@@ -4424,28 +4069,22 @@ Function Get-CEUser {
 			This is a JSON representation of the returned value:
 			{
 			  "username": "user@example.com",
-			  "status": "PENDING",
 			  "account": "string",
-			  "roles": [
-				"USER"
-			  ],
+			  "agentInstallationToken": "string",
 			  "settings": {
 				"sendNotifications": {
-				  "projectIDs": [
+				  "projectIds": [
 					"string"
 				  ]
 				}
 			  },
-			  "apiToken": "string",
-			  "hasPassword": true,
-			  "termsAccepted": true,
 			  "id": "string",
 			  "selfLink": "string"
 			}
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/6/2017
     #>
     [CmdletBinding()]
     [OutputType([System.Management.Automation.PSCustomObject])]
@@ -4461,16 +4100,67 @@ Function Get-CEUser {
     Begin {        
     }
 
-    Process {     
-		[System.String]$Path = "/me"
+    Process {
+        $SessionInfo = $null
 
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-			Write-Output -InputObject $Result
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$($SessionInfo.Url)/me"
+
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue retrieving the user info: $StatusCode $Reason - $($Result.Content)"
+			}
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving the user info: $($_.Exception.Message)"
-		}	
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
     }
 
     End {
@@ -4507,7 +4197,7 @@ Function Set-CEConsolePassword {
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/6/2017
 	#>
 	[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "HIGH")]
 	[OutputType()]
@@ -4536,25 +4226,64 @@ Function Set-CEConsolePassword {
 	}
 
 	Process {
-		[System.String]$Path = "/changePassword"
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $Session = $SessionInfo.User.Username
+        }
 
-		[System.Collections.Hashtable]$Body = @{
-			"oldPassword" = $OldPassword;
-			"newPassword" = $NewPassword
-		}
-
-		$ConfirmMessage = "Are you sure you want to update the console password?"
-		$WhatIfDescription = "Updated password for $Session."
-		$ConfirmCaption = "Update Console Password for $Session"
-
-		if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+		if ($SessionInfo -ne $null) 
 		{
-			Write-Verbose -Message "Sending updated config:`r`n $(ConvertTo-Json -InputObject $Body)"
-			
+			[System.String]$Uri = "$($SessionInfo.Url)/changePassword"
 
-			$ErrorHandling = {
-				Param($StatusCode, $Content, $ErrorMessage)
+			[System.Collections.Hashtable]$Body = @{
+				"oldPassword" = $OldPassword;
+				"newPassword" = $NewPassword
+			}
+
+			$ConfirmMessage = "Are you sure you want to update the console password?"
+			$WhatIfDescription = "Updated password for $Session."
+			$ConfirmCaption = "Update Console Password for $Session"
+
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
+			{
+				Write-Verbose -Message "Sending updated config:`r`n $(ConvertTo-Json -InputObject $Body)"
 				
+				$StatusCode = 0
+				$Reason = ""
+
+				try {
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Post -Body (ConvertTo-Json -InputObject $Body) -ContentType "application/json" -WebSession $SessionInfo.Session -ErrorAction Stop
+					$StatusCode = $Result.StatusCode
+					$Reason = $Result.StatusDescription
+				}
+				catch [System.Net.WebException] {
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
+				}
+				catch [Exception]  {
+					$Reason = $_.Exception.Message
+				}
+
 				switch ($StatusCode)
 				{
 					204 {
@@ -4562,15 +4291,16 @@ Function Set-CEConsolePassword {
 						break
 					}
 					400 {
-						throw "Password change did not succeed (e.g. Old password mismatch).`r`n$Content"
+						throw "Password change did not succeed (e.g. Old password mismatch).`r`n$($Result.Content)"
 					}
 					default {
-						throw "There was an issue with changing the password: $ErrorMessage"
+						throw "There was an issue with changing the password: $StatusCode $Reason - $($Result.Content)"
 					}
 				}
 			}
-
-			$Result = Invoke-CERequest -Path $Path -Method Post -Body ($Body | ConvertTo-Json) -Session $Session -ErrorHandling $ErrorHandling
+		}
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
 	}
 
@@ -4636,7 +4366,7 @@ Function Set-CEEmailNotifications {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/10/2017
     #>
     [CmdletBinding()]
     [OutputType([System.Management.Automation.PSCustomObject])]
@@ -4668,97 +4398,126 @@ Function Set-CEEmailNotifications {
     }
 
     Process {
+        $SessionInfo = $null
 
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
 
-		[System.String]$Path = "/users/$($SessionInfo.UserId)"
-
-		if ($Enabled) 
+		if ($SessionInfo -ne $null) 
 		{
-			if ($Ids.Length -eq 0)
+			[System.String]$Uri = "$($SessionInfo.Url)/users/$($SessionInfo.User.Id)"
+
+			if ($Enabled) 
 			{
-				$Ids += $SessionInfo.DefaultProjectId
+				if ($Ids.Length -eq 0)
+				{
+					$Ids += $SessionInfo.ProjectId
+				}
 			}
-		}
-		else # Disable notifications
-		{
-			$CurrentSetup = Get-CEUser -Session $Session
-			[System.Guid[]]$CurrentProjects = $CurrentSetup.Settings.SendNotifications.ProjectIds
+			else 
+			{
+				$CurrentSetup = Get-CEUser -Session $Session
+				[System.Guid[]]$CurrentProjects = $CurrentSetup.Settings.SendNotifications.ProjectIds
+				
+				[System.Guid[]]$RemaingProjects = @()
+
+				# Remove the Ids specified by the user by adding the current items that don't match
+				# to a temporary array
+				foreach ($Id in $CurrentProjects)
+				{
+					if (-not $Ids.Contains($Id))
+					{
+						$RemaingProjects += $Id
+					}
+				}
+
+				# Iterate again to warn the user if they specified projects that weren't currently enabled
+				foreach ($Id in $Ids)
+				{
+					if (-not $CurrentProjects.Contains($Id))
+					{
+						Write-Warning -Message "Could not find a project $Id that was enabled for notifications for the current user."
+					}
+				}
+
+				$Ids = $RemaingProjects
+			}
+
+			[System.String]$Body = ConvertTo-Json -InputObject @{"id" = $SessionInfo.User.Id; "settings" = @{"sendNotifications" = @{"projectIds" = $Ids}}} -Depth 3
+
+			Write-Verbose -Message "Setting email notifications update:`r`n$Body"
 			
-			[System.Guid[]]$RemaingProjects = @()
+			$StatusCode = 0
+			$Reason = ""
 
-			# Remove the Ids specified by the user by adding the current items that don't match
-			# to a temporary array
-			foreach ($Id in $CurrentProjects)
-			{
-				if (-not $Ids.Contains($Id))
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Patch -ContentType "application/json" -Body $Body -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
 				{
-					$RemaingProjects += $Id
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
 				}
 			}
-
-			# Iterate again to warn the user if they specified projects that weren't currently enabled
-			foreach ($Id in $Ids)
-			{
-				if (-not $CurrentProjects.Contains($Id))
-				{
-					Write-Warning -Message "Could not find a project $Id that was enabled for notifications for the current user."
-				}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
 			}
-
-			$Ids = $RemaingProjects
-		}
-
-		[System.String]$Body = ConvertTo-Json -InputObject @{
-			"username" = $SessionInfo.User.username; 
-			"settings" = @{"sendNotifications" = @{"projectIDs" = $Ids}}
-		} -Depth 3
-
-		Write-Verbose -Message "Setting email notifications update:`r`n$Body"
-		
-		$ErrorHandling = {
-			Param(
-				$StatusCode,
-				$Content,
-				$ErrorMessage,
-				$Enabled,
-				$Username
-			)
 
 			switch ($StatusCode)
 			{
 				200 {
 					if ($Enabled) 
 					{
-						Write-Verbose -Message "Email notifications enabled for $Username."
+						Write-Verbose -Message "Email notifications enabled for $($SessionInfo.User.Username)."
 					}
 					else 
 					{
-						Write-Verbose -Message "Email notifications disabled for $Username."
+						Write-Verbose -Message "Email notifications disabled for $($SessionInfo.User.Username)."
 					}
 
-					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Content))
+					if ($PassThru)
+					{
+						Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+					}
 
 					break
 				}
 				401 {
-					throw "Tried patching a user different to the currently logged in one.`r`n$Content"
+					throw "Tried patching a user different to the currently logged in one.`r`n$($Result.Content)"
 				}
 				404 {
-					throw "Cannot apply the project ids provided.`r`n$Content"
+					throw "Cannot apply the project ids provided.`r`n$($Result.Content)"
 				}
 				default {
-					throw "Email notifications could not be set properly, $ErrorMessage"
+					throw "Email notifications could not be set properly, $StatusCode $Reason - $($Result.Content)"
 				}
 			}
 		}
-
-		try {
-			$Result = Invoke-CERequest -Body $Body -Path $Path -Method Patch -Session $Session -ErrorHandling $ErrorHandling -ErrorHandlingArgs @($Enabled, $SessionInfo.User.username)
-			Write-Output -InputObject $Result
-		}
-		catch [Exception] {
-			throw "There was an issue setting the notification settings: $($_.Exception.Message)"
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
     }
 
@@ -4797,37 +4556,22 @@ Function Get-CEAccount {
 
 			This is a JSON representation of the returned object.
 			{
-				"inviteTokenExpiryMinutes": 0,
-				"allowArchivingDefaultValue": true,
-				"perAccountUserPool": true,
-				"isGcpSelfService": true,
-				"isDrTrial": true,
-				"isArmSelfService": true,
-				"isAwsSelfService": true,
-				"samlSettings": {
-					"identityProviderCertificate": "string",
-					"identityProviderUrl": "string",
-					"identityProviderID": "string"
-				},
-				"isRightSizingEnabled": true,
-				"defaultLicenseType": "MIGRATION",
-				"maxProjectsAllowed": 0,
-				"ceAdminProperties": {
-					"state": "ACTIVE",
-					"version": "string",
-					"accountOwnerUsername": "string",
-					"apisPerMinute": 0,
-					"comments": "string",
-					"history": "string"
-				},
-				"ownerId": "string",
-				"isMedOne": true,
-				"id": "string"
+			  "features": {
+				"awsExtendedHDDTypes": true,
+				"DRTier": true,
+				"pit": true,
+				"enableVolumeEncryption": true
+			  },
+			  "id": "string",
+			  "ceAdminProperties": {
+				"state": "ACTIVE",
+				"version": "string"
+			  }
 			}
 
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/6/2017
 	#>
 	[CmdletBinding()]
 	[OutputType([System.Management.Automation.PSCustomObject])]
@@ -4850,25 +4594,75 @@ Function Get-CEAccount {
 	}
 
 	Process {
+		$SessionInfo = $null
 
-		if ($AccountId -eq [System.Guid]::Empty)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			$SessionInfo = Get-CESessionOrDefault -Session $Session
-			$AccountId = [System.Guid]::Parse($SessionInfo["User"].account)
-		}
+			if ($AccountId -eq [System.Guid]::Empty)
+			{
+				$AccountId = $SessionInfo.User.Account
+			}
 
-		[System.String]$Path = "/accounts/$AccountId"
+			[System.String]$Uri = "$($SessionInfo.Url)/accounts/$AccountId"
 
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-			Write-Output -InputObject $Result
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue retrieving the CE account: $StatusCode $Reason - $($Result.Content)"
+			}
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving the CE account: $($_.Exception.Message)"
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
 	}
 
 	End {
+
 	}
 }
 
@@ -4907,31 +4701,14 @@ Function Get-CEAccountExtendedInfo {
 
 			{
 			  "account": {
-				"inviteTokenExpiryMinutes": 0,
-				"allowArchivingDefaultValue": true,
-				"perAccountUserPool": true,
-				"isGcpSelfService": true,
-				"isDrTrial": true,
-				"isArmSelfService": true,
-				"isAwsSelfService": true,
-				"samlSettings": {
-				  "identityProviderCertificate": "string",
-				  "identityProviderUrl": "string",
-				  "identityProviderID": "string"
-				},
-				"isRightSizingEnabled": true,
-				"defaultLicenseType": "MIGRATION",
 				"maxProjectsAllowed": 0,
 				"ceAdminProperties": {
 				  "state": "ACTIVE",
-				  "version": "string",
-				  "accountOwnerUsername": "string",
-				  "apisPerMinute": 0,
-				  "comments": "string",
-				  "history": "string"
+				  "version": "string"
 				},
-				"ownerId": "string",
-				"isMedOne": true,
+				"isGcpSelfService": true,
+				"isArmSelfService": true,
+				"isAwsSelfService": true,
 				"id": "string"
 			  },
 			  "clouds": {
@@ -4956,19 +4733,17 @@ Function Get-CEAccountExtendedInfo {
 				"placementGroups": [
 				  "string"
 				],
-				"scsiAdapterTypes": [
-				  "string"
-				],
+				"name": "string",
 				"instanceTypes": [
 				  "string"
 				],
-				"zones": [
+				"iamRoles": [
 				  "string"
 				],
+				"id": "string",
 				"volumeEncryptionKeys": [
 				  "string"
 				],
-				"cloud": "string",
 				"securityGroups": [
 				  {
 					"networkId": "string",
@@ -4976,60 +4751,18 @@ Function Get-CEAccountExtendedInfo {
 					"name": "string"
 				  }
 				],
-				"logicalLocations": [
-				  {
-					"locationId": "string",
-					"name": "string"
-				  }
-				],
 				"staticIps": [
 				  "string"
 				],
-				"maxCpusPerMachine": 0,
-				"networkInterfaces": [
-				  {
-					"subnetId": "string",
-					"name": "string",
-					"privateIp": "string"
-				  }
-				],
-				"computeLocations": [
-				  {
-					"isEncryptionSupported": true,
-					"locationId": "string",
-					"name": "string"
-				  }
-				],
-				"name": "string",
-				"storageLocations": [
-				  {
-					"locationId": "string",
-					"name": "string"
-				  }
-				],
-				"iamRoles": [
-				  "string"
-				],
-				"id": "string",
-				"maxCoresPerMachineCpu": 0,
-				"dedicatedHosts": [
-				  "string"
-				],
-				"networkAdapterTypes": [
-				  "string"
-				],
-				"maxMbRamPerMachine": 0
+				"cloud": "string"
 			  },
 			  "dateTime": {
-				"dateTime": "2019-10-15T16:25:26Z"
+				"dateTime": "2017-10-04T15:34:44Z"
 			  },
 			  "user": {
 				"username": "user@example.com",
-				"status": "PENDING",
+				"hasPassword": true,
 				"account": "string",
-				"roles": [
-				  "USER"
-				],
 				"settings": {
 				  "sendNotifications": {
 					"projectIDs": [
@@ -5037,11 +4770,20 @@ Function Get-CEAccountExtendedInfo {
 					]
 				  }
 				},
-				"apiToken": "string",
-				"hasPassword": true,
-				"termsAccepted": true,
 				"id": "string",
 				"selfLink": "string"
+			  },
+			  "licenses": {
+				"items": [
+				  {
+					"count": 0,
+					"durationFromStartOfUse": "string",
+					"used": 0,
+					"expirationDateTime": "2017-10-04T15:34:44Z",
+					"type": "MIGRATION",
+					"id": "string"
+				  }
+				]
 			  },
 			  "projects": {
 				"items": [
@@ -5049,12 +4791,6 @@ Function Get-CEAccountExtendedInfo {
 					"targetCloudId": "string",
 					"agentInstallationToken": "string",
 					"name": "string",
-					"usersIDs": [
-					  "string"
-					],
-					"type": "MIGRATION",
-					"replicationReversed": true,
-					"sourceCloudCredentialsId": "string",
 					"cloudCredentialsIDs": [
 					  "string"
 					],
@@ -5062,21 +4798,15 @@ Function Get-CEAccountExtendedInfo {
 					"licensesIDs": [
 					  "string"
 					],
-					"ceAdminProperties": {
-					  "comments": "string",
-					  "history": "string"
-					},
+					"replicationReversed": true,
 					"replicationConfiguration": "string",
-					"sourceCloudId": "string",
+					"type": "MIGRATION",
 					"id": "string",
 					"features": {
 					  "awsExtendedHddTypes": true,
-					  "allowRecoveryPlans": true,
-					  "allowArchiving": true,
-					  "isDemo": true,
-					  "drTier2": true,
-					  "allowByolOnDedicatedInstance": true,
-					  "pit": true
+					  "pit": true,
+					  "enableVolumeEncryption": true,
+					  "drTier2": true
 					}
 				  }
 				]
@@ -5092,28 +4822,16 @@ Function Get-CEAccountExtendedInfo {
 						"value": "string"
 					  }
 					],
-					"disablePublicIp": true,
 					"subnetHostProject": "string",
-					"replicationServerType": "string",
-					"useLowCostDisks": true,
-					"computeLocationId": "string",
-					"cloudCredentials": "string",
-					"subnetId": "string",
-					"logicalLocationId": "string",
-					"bandwidthThrottling": 0,
-					"useDedicatedServer": true,
-					"zone": "string",
 					"replicatorSecurityGroupIDs": [
 					  "string"
 					],
 					"usePrivateIp": true,
 					"region": "string",
-					"id": "string",
 					"proxyUrl": "string",
-					"volumeEncryptionAllowed": true,
-					"objectStorageLocation": "string",
-					"archivingEnabled": true,
-					"storageLocationId": "string"
+					"cloudCredentials": "string",
+					"subnetId": "string",
+					"id": "string"
 				  }
 				]
 			  }
@@ -5121,7 +4839,8 @@ Function Get-CEAccountExtendedInfo {
 
 		 .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/5/2017
+
 	#>
 	[CmdletBinding()]
 	[OutputType([System.Management.Automation.PSCustomObject])]
@@ -5138,15 +4857,71 @@ Function Get-CEAccountExtendedInfo {
     }
 
     Process {
-		[System.String]$Path = "/extendedAccountInfo"
+        $SessionInfo = $null
 
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-			Write-Output -InputObject $Result
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
+		{
+			if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
+			{
+				throw "This cmdlet is only supported in v3 and later. Your account is using v$($SessionInfo.Version)."
+			}
+
+			[System.String]$Uri = "$($SessionInfo.Url)/extendedAccountInfo"
+
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				Write-Output -InputObject (ConvertFrom-Json -InputObject $Result.Content)
+			}
+			else
+			{
+				Write-Warning -Message "There was an issue retrieving the account summary: $StatusCode $Reason - $($Result.Content)"
+			}
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving the account summary: $($_.Exception.Message)"
-		}	
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
     }
 
     End {
@@ -5202,10 +4977,10 @@ Function Get-CELicense {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/15/2019
+			LAST UPDATE: 10/6/2017
     #>
     [CmdletBinding(DefaultParameterSetName = "List")]
-    [OutputType([System.Management.Automation.PSCustomObject[]])]
+    [OutputType([System.Management.Automation.PSCustomObject], [System.Management.Automation.PSCustomObject[]])]
     Param(
 		[Parameter(ValueFromPipeline = $true, ParameterSetName = "Get")]
 		[ValidateScript({
@@ -5233,64 +5008,107 @@ Function Get-CELicense {
     }
 
     Process {
-		[System.String]$Path = "/licenses"
+        $SessionInfo = $null
 
-		switch ($PSCmdlet.ParameterSetName)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			"Get" {
+			[System.String]$Uri = "$($SessionInfo.Url)/licenses"
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					if ($Id -ne [System.Guid]::Empty)
+					{
+						$Uri += "/$($Id.ToString())"
+					}
+					break
+				}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+					break
+				}
+				default {
+					throw "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+				}
+			}
+
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
 				if ($Id -ne [System.Guid]::Empty)
 				{
-					$Path += "/$($Id.ToString())"
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
 				}
-				break
-			}
-			"List" {
-				if ($Offset -gt 0 -or $Limit -lt 1500)
+				else 
 				{
-					$QueryString = [System.String]::Empty
-
-					if ($Offset -gt 0)
-					{
-						$QueryString += "&offset=$Offset"
-					}
-
-					if ($Limit -lt 1500)
-					{
-						$QueryString += "&limit=$Limit"
-					}
-
-					# Remove the first character which is an unecessary ampersand
-					$Path += "?$($QueryString.Substring(1))"
+					Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
 				}
-				break
 			}
-			default {
-				throw "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+			else
+			{
+				throw "There was an issue retrieving the license information: $StatusCode $Reason - $($Result.Content)"
 			}
 		}
-
-		try {
-
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-			
-			[PSCustomObject[]]$Return = @()
-
-			if ($Id -ne [System.Guid]::Empty)
-			{
-				$Return += $Result
-			}
-			else 
-			{
-				$Return += $Result.Items
-			}
-
-			# Force PowerShell to stop unboxing 1 item arrays
-			# Cannot be used with Write-Output
-			,$Return
+		else 
+		{
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
-		catch [Exception] {
-			throw "There was an issue retrieving the license information: $($_.Exception.Message)"
-		}	
     }
 
     End {
@@ -5647,12 +5465,6 @@ Function Get-CEProject {
 				  "targetCloudId": "string",
 				  "agentInstallationToken": "string",
 				  "name": "string",
-				  "usersIDs": [
-					"string"
-				  ],
-				  "type": "MIGRATION",
-				  "replicationReversed": true,
-				  "sourceCloudCredentialsId": "string",
 				  "cloudCredentialsIDs": [
 					"string"
 				  ],
@@ -5660,28 +5472,22 @@ Function Get-CEProject {
 				  "licensesIDs": [
 					"string"
 				  ],
-				  "ceAdminProperties": {
-					"comments": "string",
-					"history": "string"
-				  },
+				  "replicationReversed": true,
 				  "replicationConfiguration": "string",
-				  "sourceCloudId": "string",
+				  "type": "MIGRATION",
 				  "id": "string",
 				  "features": {
 					"awsExtendedHddTypes": true,
-					"allowRecoveryPlans": true,
-					"allowArchiving": true,
-					"isDemo": true,
-					"drTier2": true,
-					"allowByolOnDedicatedInstance": true,
-					"pit": true
+					"pit": true,
+					"enableVolumeEncryption": true,
+					"drTier2": true
 				  }
 				}
 			]
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/16/2019
+			LAST UPDATE: 10/5/2017
     #>
     [CmdletBinding(DefaultParameterSetName = "List")]
     [OutputType([PSCustomObject], [PSCustomObject[]])]
@@ -5715,61 +5521,109 @@ Function Get-CEProject {
     }
 
     Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+        $SessionInfo = $null
 
-		[System.String]$Path = "/projects"
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
 
-		switch ($PSCmdlet.ParameterSetName)
+		if ($SessionInfo -ne $null) 
 		{
-			"Get" {
-				$Path += "/$($Id.ToString())"
+			[System.String]$Uri = "$($SessionInfo.Url)/projects"
 
-				break
-			}
-			"List" {
-				if ($Offset -gt 0 -or $Limit -lt 1500)
-				{
-					$QueryString = [System.String]::Empty
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					$Uri += "/$($Id.ToString())"
 
-					if ($Offset -gt 0)
-					{
-						$QueryString += "&offset=$Offset"
-					}
-
-					if ($Limit -lt 1500)
-					{
-						$QueryString += "&limit=$Limit"
-					}
-
-					# Remove the first character which is an unecessary ampersand
-					$Path += "?$($QueryString.Substring(1))"
+					break
 				}
-				break
-			}
-			"Current" {
-				$Path += "/$($SessionInfo["DefaultProjectId"])"
-				break
-			}
-			default {
-				Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
-				break
-			}
-		}
-		
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-		}
-		catch [Exception] {
-			throw "There was an issue retrieving the project information: $($_.Exception.Message)"
-		}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
 
-		if ($PSCmdlet.ParameterSetName -ieq "List")
-		{
-			Write-Output -InputObject $Result.Items			
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+					break
+				}
+				"Current" {
+					$Uri += "/$($SessionInfo.ProjectId)"
+					break
+				}
+				default {
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
+			}
+			
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
+				{
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				if ($PSCmdlet.ParameterSetName -ieq "List")
+				{
+					Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)				
+				}
+				else 
+				{
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
+				}
+			}
+			else
+			{
+				throw "There was an issue retrieving the project information: $StatusCode $Reason - $($Result.Content)"
+			}
 		}
 		else 
 		{
-			Write-Output -InputObject $Result
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
     }
 
@@ -6919,10 +6773,7 @@ Function Get-CECloud {
 			The cmdlet retrieves information about a cloud or lists the available clouds if no Id is specified.
 
 		.PARAMETER Id
-			The Id of the cloud to retrieve. If no Id is specified, all available clouds are returned.
-
-		.PARAMETER Name
-			The name of the cloud to retrieve. If no name is specified, all available clouds are returned.
+			The Id of the region to retrieve. If no Id is specified, all available regions in the target cloud are returned.
 
 		.PARAMETER Offset
 			With which item to start (0 based).
@@ -6941,15 +6792,10 @@ Function Get-CECloud {
 		.EXAMPLE
 			Get-CECloud -Id 4c7b3582-9e73-4866-858a-8e1ac6e818b3
 
-			Retrieves information about the cloud with the specified Id, which is AWS.
-
-		.EXAMPLE
-			Get-CECloud -Name AWS
-
-			Retrieves information about the AWS cloud.
+			Retrieves informatio about the cloud with the specified Id, which is AWS.
 
 		.INPUTS
-			None
+			None or System.Guid
 
 		.OUPUTS
 			System.Management.Automation.PSCustomObject or System.Management.Automation.PSCustomObject[]
@@ -6967,20 +6813,16 @@ Function Get-CECloud {
 			
 		.NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/16/2019
+			LAST UPDATE: 10/6/2017
 	#>
 	[CmdletBinding(DefaultParameterSetName = "List")]
 	[OutputType([System.Management.Automation.PSCustomObject], [System.Management.Automation.PSCustomObject[]])]
 	Param (
-		[Parameter(Mandatory = $true, Position = 0, ParameterSetName = "GetById")]
+		[Parameter(ValueFromPipeline = $true, Mandatory = $true, Position = 0, ParameterSetName = "Get")]
 		[ValidateScript({
 			$_ -ne [System.Guid]::Empty
 		})]
 		[System.Guid]$Id = [System.Guid]::Empty,
-
-		[Parameter(Mandatory = $true, Position = 0, ParameterSetName = "GetByName")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Name = [System.String]::Empty,
 
 		[Parameter(ParameterSetName = "List")]
 		[ValidateRange(0, [System.UInt32]::MaxValue)]
@@ -7002,70 +6844,178 @@ Function Get-CECloud {
 	}
 
 	Process {
-		[System.String]$Path = "/clouds"
-		[System.Int32]$ResultCount = 0
-		[System.Boolean]$Found = $false
+		$SessionInfo = $null
 
-		do {
-			[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
-			[System.String]$TempUri = "$Path$QueryString"
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
 
-			Write-Verbose -Message "Querying clouds from $Offset to $($Offset + $Limit)."
+		if ($SessionInfo -ne $null) 
+		{
+			[System.String]$Uri = "$($SessionInfo.Url)/clouds"
 
-			try {
-				$Result = Invoke-CERequest -Path $TempUri -Method Get -Session $Session -ExpectedResponseCode 200
-			}
-			catch [Exception] {
-				throw "There was an issue listing the clouds: $($_.Exception.Message)"
-			}
-
-			[PSCustomObject[]]$Content = $Result.Items
-			$ResultCount = $Result.Items.Length
-
-			switch -wildcard ($PSCmdlet.ParameterSetName)
+			switch ($PSCmdlet.ParameterSetName)
 			{
-				"Get*" {
+				"Get" {
+					# This REST API doesn't support supplying the Id as part of the URL
 
-					$Filter = {}
-					if ($PSCmdlet.ParameterSetName -eq "GetById")
-					{
-						$Filter = {$_.Id -ieq $Id.ToString()}
-					}
-					else
-					{
-						$Filter = {$_.name -ieq $Name}
-					}
+					$Offset = 0
+					$Limit = 1500
 
-					$Cloud = $Content | Where-Object $Filter
+					[System.Int32]$ResultCount = 0
+					[System.Boolean]$Found = $false
+					$Cloud = $null
 
-					if ($Cloud -ne $null)
+					# Go until the results returned are less than the specified limit or the loop
+					# breaks when the config is found
+					do
 					{
-						Write-Output -InputObject ([PSCustomObject]($Cloud | Select-Object -First 1))
-						$Found = $true
-						break
-					}
-					else
+						Write-Verbose -Message "Querying clouds from $Offset to $($Offset + $Limit)."
+
+						[System.String]$QueryString = "?offset=$Offset&limit=$Limit"
+						[System.String]$TempUri = "$Uri$QueryString"
+
+						$StatusCode = 0
+						$Reason = ""
+
+						try {
+							[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $TempUri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+							$StatusCode = $Result.StatusCode
+							$Reason = $Result.StatusDescription
+						}
+						catch [System.Net.WebException] {
+							[System.Net.WebException]$Ex = $_.Exception
+
+							if ($Ex.Response -eq $null)
+							{
+								$Reason = "$($Ex.Status): $($Ex.Message)"
+								$StatusCode = 500
+							}
+							else
+							{
+								[System.Net.HttpWebResponse]$Response = $Ex.Response
+								$StatusCode = [System.Int32]$Response.StatusCode
+			
+								[System.IO.Stream]$Stream = $Response.GetResponseStream()
+								[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+								[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+								$Content = $Reader.ReadToEnd()
+
+								$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+							}
+						}
+						catch [Exception]  {
+							$Reason = $_.Exception.Message
+						}
+
+						if ($StatusCode -eq 200)
+						{
+							[PSCustomObject[]]$Content = ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+							$ResultCount = $Content.Length
+
+							$Cloud = $Content | Where-Object {$_.Id -ieq $Id.ToString()}
+
+							if ($Cloud -ne $null)
+							{
+								Write-Output -InputObject ([PSCustomObject]($Cloud | Select-Object -First 1))
+								$Found = $true
+								break
+							}
+							else
+							{
+								$Offset += $Limit
+							}
+						}
+						else
+						{
+							Write-Warning -Message "There was an issue retrieving CE clouds: $StatusCode $Reason - $($Result.Content)"
+							break
+						}
+
+					} while ($ResultCount -ge $Limit)
+
+					if (-not $Found)
 					{
-						$Offset += $Limit
+						throw "The cloud with Id $Id was not found."
 					}
 
 					break
 				}
 				"List" {
-					Write-Output -InputObject $Content
-					$ResultCount = $Limit - 1 # Make sure we break the do loop
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+
+					$StatusCode = 0
+					$Reason = ""
+
+					try {
+						[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+						$StatusCode = $Result.StatusCode
+						$Reason = $Result.StatusDescription
+					}
+					catch [System.Net.WebException] {
+						[System.Net.WebException]$Ex = $_.Exception
+
+						if ($Ex.Response -eq $null)
+						{
+							$Reason = "$($Ex.Status): $($Ex.Message)"
+							$StatusCode = 500
+						}
+						else
+						{
+							[System.Net.HttpWebResponse]$Response = $Ex.Response
+							$StatusCode = [System.Int32]$Response.StatusCode
+			
+							[System.IO.Stream]$Stream = $Response.GetResponseStream()
+							[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+							[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+							$Content = $Reader.ReadToEnd()
+
+							$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+						}
+					}
+					catch [Exception]  {
+						$Reason = $_.Exception.Message
+					}
+
+					if ($StatusCode -eq 200)
+					{
+						Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
+					}
+					else
+					{
+						throw "There was an issue retrieving CE clouds: $StatusCode $Reason - $($Result.Content)"
+					}
+
 					break
 				}
 				default {
 					throw "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
 				}
 			}
-
-		} while ($ResultCount -ge $Limit)
-
-		if ($PSCmdlet.ParameterSetName -like "Get*" -and -not $Found)
+		}
+		else 
 		{
-			throw "The cloud with Id $Id was not found."
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
 	}
 
@@ -7140,19 +7090,17 @@ Function Get-CECloudRegion {
 				  "placementGroups": [
 					"string"
 				  ],
-				  "scsiAdapterTypes": [
-					"string"
-				  ],
+				  "name": "string",
 				  "instanceTypes": [
 					"string"
 				  ],
-				  "zones": [
+				  "iamRoles": [
 					"string"
 				  ],
+				  "id": "string",
 				  "volumeEncryptionKeys": [
 					"string"
 				  ],
-				  "cloud": "string",
 				  "securityGroups": [
 					{
 					  "networkId": "string",
@@ -7160,70 +7108,25 @@ Function Get-CECloudRegion {
 					  "name": "string"
 					}
 				  ],
-				  "logicalLocations": [
-					{
-					  "locationId": "string",
-					  "name": "string"
-					}
-				  ],
 				  "staticIps": [
 					"string"
 				  ],
-				  "maxCpusPerMachine": 0,
-				  "networkInterfaces": [
-					{
-					  "subnetId": "string",
-					  "name": "string",
-					  "privateIp": "string"
-					}
-				  ],
-				  "computeLocations": [
-					{
-					  "isEncryptionSupported": true,
-					  "locationId": "string",
-					  "name": "string"
-					}
-				  ],
-				  "name": "string",
-				  "storageLocations": [
-					{
-					  "locationId": "string",
-					  "name": "string"
-					}
-				  ],
-				  "iamRoles": [
-					"string"
-				  ],
-				  "id": "string",
-				  "maxCoresPerMachineCpu": 0,
-				  "dedicatedHosts": [
-					"string"
-				  ],
-				  "networkAdapterTypes": [
-					"string"
-				  ],
-				  "maxMbRamPerMachine": 0
+				  "cloud": "string"
 				}
 			]
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/16/2019
+			LAST UPDATE: 10/6/2017
     #>
 	[CmdletBinding(DefaultParameterSetName = "List")]
 	[OutputType([PSCustomObject], [PSCustomObject[]])]
 	Param(
-		[Parameter(Mandatory = $true, Position = 0, ParameterSetName = "Get")]
+		[Parameter(ValueFromPipeline = $true, Mandatory = $true, Position = 0, ParameterSetName = "Get")]
 		[ValidateScript({
 			$_ -ne [System.Guid]::Empty
 		})]
 		[System.Guid]$Id = [System.Guid]::Empty,
-
-		<# TODO
-		[Parameter(ValueFromPipeline = $true, Mandatory = $true, Position = 0, ParameterSetName = "GetByName")]
-		[ValidateNotNullOrEmpty()]
-		[System.String]$Name = [System.String]::Empty,
-		#>
 
 		[Parameter(ParameterSetName = "List")]
 		[ValidateRange(0, [System.UInt32]::MaxValue)]
@@ -7261,115 +7164,143 @@ Function Get-CECloudRegion {
 	}
 
 	Process {
-		$SessionInfo = Get-CESessionOrDefault -Session $Session
+		if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session)
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+            $Session = $SessionInfo.User.Username
+        }
 
-		$Splat = @{}
-
-		if (-not [System.String]::IsNullOrEmpty($Session))
+		if ($SessionInfo -ne $null) 
 		{
-			$Splat.Add("Session", $Session)
-		}
-
-		if ($ProjectId -eq [System.Guid]::Empty)
-		{
-			$ProjectId = $SessionInfo["DefaultProjectId"]
-		}
-
-		# Check to see if they were specified since an empty GUID means on-premises
-		if (-not $PSBoundParameters.ContainsKey("CloudCredentials"))
-		{
-			$CloudCredentials = $SessionInfo["DefaultCloudCredentialsId"]
-		}
-
-		[System.String]$Path = "/cloudCredentials/$CloudCredentials/regions"
-
-		switch ($PSCmdlet.ParameterSetName)
-		{
-			"Get" {
-				$Path += "/$($Id.ToString())"
-
-				break
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
 			}
-			"GetTarget" {	
-				$Project = Get-CEProject -Id $ProjectId @Splat
 
-				if ([System.String]::IsNullOrEmpty($Project.ReplicationConfiguration))
-				{
-					throw  "The project $($Project.Name) ($ProjectId) does not have a replication configuration yet, so the target region cannot be determined."
+			# Check to see if they were specified since an empty GUID means on-premises
+			if (-not $PSBoundParameters.ContainsKey("CloudCredentials"))
+			{
+				$CloudCredentials = $SessionInfo.DefaultCloudCredentials
+			}
+
+			[System.String]$Uri = "$($SessionInfo.Url)/cloudCredentials/$CloudCredentials/regions"
+
+			switch ($PSCmdlet.ParameterSetName)
+			{
+				"Get" {
+					$Uri += "/$($Id.ToString())"
+
+					break
 				}
+				"GetTarget" {	
+					$Project = Get-CEProject -Id $ProjectId -Session $Session
+					$ReplConfig = Get-CEReplicationConfiguration -Id $Project.ReplicationConfiguration -Session $Session -ProjectId $ProjectId
+					$Uri += "/$($ReplConfig.Region.ToString())"
 
-				$ReplConfig = Get-CEReplicationConfiguration -Id $Project.ReplicationConfiguration -ProjectId $ProjectId @Splat
-				$Path += "/$($ReplConfig.Region.ToString())"
+					break
+				}
+				"GetSource" {
+					$Project = Get-CEProject -Id $ProjectId -Session $Session
+					
+					if ($SessionInfo.Version -ne "latest" -and $SessionInfo.Version -lt 3)
+					{
+						$Id = $Project.Source
+					}
+					else
+					{
+						$Id = $Project.sourceRegion
+					}
 
-				break
+					if ($Id -ne $script:CloudIds["Generic"])
+					{
+						$Uri += "/$($Id.ToString())"
+					}
+					else 
+					{
+						return [PSCustomObject]@{"cloud" = "GENERIC"; "iamRoles" = @(); "id" = $script:CloudIds["Generic"]; "instanceTypes" = @(); "name" = "Generic"; "placementGroups" = @(); "securityGroups" = @(); "staticIps" = @(); "subnets" = @(@{"name" = "Default"}); "volumeEncrtptionKeys" = @("Default")}
+					}
+
+					break
+				}
+				"List" {
+					if ($Offset -gt 0 -or $Limit -lt 1500)
+					{
+						$QueryString = [System.String]::Empty
+
+						if ($Offset -gt 0)
+						{
+							$QueryString += "&offset=$Offset"
+						}
+
+						if ($Limit -lt 1500)
+						{
+							$QueryString += "&limit=$Limit"
+						}
+
+						# Remove the first character which is an unecessary ampersand
+						$Uri += "?$($QueryString.Substring(1))"
+					}
+					break
+				}
+				default {
+					Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
+					break
+				}
 			}
-			"GetSource" {
-				$Project = Get-CEProject -Id $ProjectId @Splat
-				$Id = $Project.sourceRegion
-				
-				if ($Id -ne $script:CloudIds["Generic"])
+
+			$StatusCode = 0
+			$Reason = ""
+
+			try {
+				[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Get -WebSession $SessionInfo.Session -ErrorAction Stop
+				$StatusCode = $Result.StatusCode
+				$Reason = $Result.StatusDescription
+			}
+			catch [System.Net.WebException] {
+				[System.Net.WebException]$Ex = $_.Exception
+
+				if ($Ex.Response -eq $null)
 				{
-					$Path += "/$($Id.ToString())"
+					$Reason = "$($Ex.Status): $($Ex.Message)"
+					$StatusCode = 500
+				}
+				else
+				{
+					[System.Net.HttpWebResponse]$Response = $Ex.Response
+					$StatusCode = [System.Int32]$Response.StatusCode
+			
+					[System.IO.Stream]$Stream = $Response.GetResponseStream()
+					[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+					[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+					$Content = $Reader.ReadToEnd()
+
+					$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+				}
+			}
+			catch [Exception]  {
+				$Reason = $_.Exception.Message
+			}
+
+			if ($StatusCode -eq 200)
+			{
+				if ($PSCmdlet.ParameterSetName -ieq "List")
+				{
+					Write-Output -InputObject ([PSCustomObject[]](ConvertFrom-Json -InputObject $Result.Content).Items)
 				}
 				else 
 				{
-					return [PSCustomObject]@{
-						"cloud" = "GENERIC"; 
-						"iamRoles" = @(); 
-						"id" = $script:CloudIds["Generic"]; 
-						"instanceTypes" = @(); 
-						"name" = "Generic"; 
-						"placementGroups" = @(); 
-						"securityGroups" = @(); 
-						"staticIps" = @(); 
-						"subnets" = @(@{"name" = "Default"}); 
-						"volumeEncryptionKeys" = @("Default")
-					}
+					Write-Output -InputObject ([PSCustomObject](ConvertFrom-Json -InputObject $Result.Content))
 				}
-
-				break
 			}
-			"List" {
-				if ($Offset -gt 0 -or $Limit -lt 1500)
-				{
-					$QueryString = [System.String]::Empty
-
-					if ($Offset -gt 0)
-					{
-						$QueryString += "&offset=$Offset"
-					}
-
-					if ($Limit -lt 1500)
-					{
-						$QueryString += "&limit=$Limit"
-					}
-
-					# Remove the first character which is an unecessary ampersand
-					$Path += "?$($QueryString.Substring(1))"
-				}
-				break
-			}
-			default {
-				Write-Warning -Message "Encountered an unknown parameter set $($PSCmdlet.ParameterSetName)."
-				break
+			else
+			{
+				throw "There was an issue getting the CE cloud region(s): $StatusCode $Reason - $($Result.Content)"
 			}
 		}
-		try {
-			$Result = Invoke-CERequest -Path $Path -Method Get -Session $Session -ExpectedResponseCode 200
-		
-			if ($PSCmdlet.ParameterSetName -eq "List")
-			{
-				$Return += $Result.Items
-
-				Write-Output -InputObject $Result.Items
-			}
-			else 
-			{
-				Write-Output -InputObject $Result
-			}
-		}
-		catch [Exception] {
-			throw "There was an issue listing the cloud regions: $($_.Exception.Message)"
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
 		}
 	}
 
@@ -7377,7 +7308,7 @@ Function Get-CECloudRegion {
 	}
 }
 
-Function Get-CETargetCloudRegion {
+Function Get-CETargetCloud {
 	<#
         .SYNOPSIS
 			Gets information about the destination cloud environment.
@@ -7458,7 +7389,7 @@ Function Get-CETargetCloudRegion {
 	}
 }
 
-Function Get-CESourceCloudRegion {
+Function Get-CESourceCloud {
 	<#
         .SYNOPSIS
 			Gets information about the source cloud environment.
@@ -8188,7 +8119,7 @@ Function Remove-CEMachine {
 
         .NOTES
             AUTHOR: Michael Haken
-			LAST UPDATE: 10/21/2019
+			LAST UPDATE: 9/11/2017
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
 	[OutputType()]
@@ -8217,36 +8148,84 @@ Function Remove-CEMachine {
     }
 
     Process {
-        $SessionInfo = Get-CESessionOrDefault -Session $Session
+        $SessionInfo = $null
 
-		if ($ProjectId -eq [System.Guid]::Empty)
+        if (-not [System.String]::IsNullOrEmpty($Session)) {
+            $SessionInfo = $script:Sessions.Get_Item($Session.ToLower())
+        }
+        else {
+            $SessionInfo = $script:Sessions.GetEnumerator() | Select-Object -First 1 -ExpandProperty Value
+			$Session = $SessionInfo.User.Username
+        }
+
+		if ($SessionInfo -ne $null) 
 		{
-			$ProjectId = $SessionInfo.DefaultProjectId
-		}
+			if ($ProjectId -eq [System.Guid]::Empty)
+			{
+				$ProjectId = $SessionInfo.ProjectId
+			}
 
-		[System.String]$Path = "/projects/$ProjectId/machines"
+			[System.String]$Uri = "$($SessionInfo.Url)/projects/$ProjectId/machines"
 
-		[System.String]$Body = ConvertTo-Json -InputObject @{"machineIDs" = $Ids}
+			[System.String]$Body = ConvertTo-Json -InputObject @{"machineIDs" = $Ids}
 
-		$ConfirmMessage = @"
+			$ConfirmMessage = @"
 You are about to uninstall the CloudEndure Agent from $($Ids.Length) Source instance$(if ($Ids.Length -gt 1) { "s" }).
 
 This will cause data replication to stop and the instance$(if ($Ids.Length -gt 1) { "s" }) will no longer appear in the CloudEndure Console.
 "@
 
-		$WhatIfDescription = "Deleted CE Instances $([System.String]::Join(",", $Ids))"
-		$ConfirmCaption = "Delete CE Instance $([System.String]::Join(",", $Ids))"
+			$WhatIfDescription = "Deleted CE Instances $([System.String]::Join(",", $Ids))"
+			$ConfirmCaption = "Delete CE Instance $([System.String]::Join(",", $Ids))"
 
-		if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
-		{
-			try {
-				$Result = Invoke-CERequest -Path $Path -Method Delete -Session $Session -Body $Body -ExpectedResponseCode 204
-			}
-			catch [Exception]
+			if ($Force -or $PSCmdlet.ShouldProcess($WhatIfDescription, $ConfirmMessage, $ConfirmCaption))
 			{
-				throw "There was an issue removing the CE machines: $($_.Exception.Message)"
-			}		
-		}	
+				$StatusCode = 0
+				$Reason = ""
+
+				try {
+					[Microsoft.PowerShell.Commands.HtmlWebResponseObject]$Result = Invoke-WebRequest -Uri $Uri -Method Delete -ContentType "application/json" -Body $Body -WebSession $SessionInfo.Session -ErrorAction Stop
+					$StatusCode = $Result.StatusCode
+					$Reason = $Result.StatusDescription
+				}
+				catch [System.Net.WebException] {
+					[System.Net.WebException]$Ex = $_.Exception
+
+					if ($Ex.Response -eq $null)
+					{
+						$Reason = "$($Ex.Status): $($Ex.Message)"
+						$StatusCode = 500
+					}
+					else
+					{
+						[System.Net.HttpWebResponse]$Response = $Ex.Response
+						$StatusCode = [System.Int32]$Response.StatusCode
+			
+						[System.IO.Stream]$Stream = $Response.GetResponseStream()
+						[System.Text.Encoding]$Encoding = [System.Text.Encoding]::GetEncoding("utf-8")
+						[System.IO.StreamReader]$Reader = New-Object -TypeName System.IO.StreamReader($Stream, $Encoding)
+						$Content = $Reader.ReadToEnd()
+
+						$Reason = "$($Response.StatusDescription) $($_.Exception.Message)`r`n$Content"
+					}
+				}
+				catch [Exception]  {
+					$Reason = $_.Exception.Message
+				}
+
+				if ($StatusCode -eq 204)
+				{
+					Write-Verbose -Message "Machine(s) $([System.String]::Join(",", $Ids)) successfully deleted."
+				}
+				else
+				{
+					Write-Warning -Message "There was an issue removing the CE machines: $StatusCode) $Reason - $($Result.Content)"
+				}
+			}
+		}
+		else {
+			throw "A valid Session could not be found with the information provided. Check your active sessions with Get-CESession or create a new session with New-CESession."
+		}
     }
 
     End {
