@@ -58,6 +58,9 @@ The commands will get all of the blueprints in both accounts.**
 
 ## Revision History
 
+### 2.0.0-alpha
+The whole module has been almost completely rewritten. It now only targets the latest version of the API, v5. This is an alpha release, so certain components may not work, testing was only done against AWS.
+	
 ### 1.2.1.0
 Updated Get-CEWindowsInstaller so that the web response is returned to the pipeline.
 

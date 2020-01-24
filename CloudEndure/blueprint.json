@@ -1,0 +1,26 @@
+{
+  "byolOnDedicatedInstance": false,
+  "disks": [
+    {
+      "iops": 1500,
+      "name": "c:0",
+      "type": "SSD"
+    }
+  ],
+  "iamRole": "EC2Role",
+  "instanceType": "t3.micro",
+  "networkInterface": "",
+  "placementGroup": "",
+  "privateIPAction": "CREATE_NEW",
+  "privateIPs": [],
+  "publicIPAction": "ALLOCATE",
+  "runAfterLaunch": true,
+  "securityGroupIDs": [ "sg-014d4e92da0146a87" ],
+  "staticIp": "",
+  "staticIpAction": "DONT_CREATE",
+  "subnetIDs": [ "subnet-0eeaef2d91431526c" ],
+  "subnetsHostProject": "",
+  "tags": [],
+  "tenancy": "SHARED",
+  "dedicatedHostIdentifier": "AUTO_PLACEMENT"
+}

@@ -90,21 +90,26 @@ FunctionsToExport = @(
 	"Get-CELicense",
 
 	# Projects
-	"Get-CEProject", "Set-CEProject", "New-CEProject", "Remove-CEProject",
+	"Get-CEProject", "Set-CEProject", "New-CEProject", "Remove-CEProject", "Set-CEProjectSourceRegion"
 
 	# Cloud Credentials
 	"New-CECloudCredential", "Get-CECloudCredential", "Set-CECloudCredential",
 
 	# Cloud
-	"Get-CECloud", "Get-CECloudRegion", "Get-CETargetCloudRegion", "Get-CESourceCloudRegion",
+	"Get-CECloud", "Get-CECloudRegion", "Get-CETargetCloudRegion", "Get-CESourceCloudRegion", "Remove-CERegion",
+	"Set-CERegion"
 	 
 	# Machines
 	"Get-CEMachine", "Remove-CEMachine", "Get-CEMachineReplica", "Set-CEMachine",
 
 	# Actions
-	"New-CEInstallationToken", "Get-CEInstallationToken", "Start-CEDataReplication", "Stop-CEDataReplication", "Invoke-CEMachineFailover",
-	"Invoke-CEMachineTest", "Invoke-CEMachineCutover", "Invoke-CEReplicaCleanup", "Get-CEJobs", "Move-CEMachine", "Invoke-CELaunchTargetMachine",
+	"New-CEInstallationToken", "Get-CEInstallationToken", "Start-CEDataReplication", "Stop-CEDataReplication",
+	"Invoke-CEReplicaCleanup", "Get-CEJobs", "Move-CEMachine", "Invoke-CELaunchTargetMachine",
 	"Suspend-CEDataReplication",
+
+	# Configuration
+	"Set-CEUserPassword", "Get-CEProjectStorage", "Add-CEUserRoles", "Add-CEUserToProject", "Remove-CEUserFromProject",
+	"Get-CEAuditLog", "New-CEUser", "New-CEApiToken", "Get-CETemporaryToken",
 	
 	# Misc
 	"Get-CEWindowsInstaller"
@@ -133,6 +138,8 @@ PrivateData = @{
 
     PSData = @{
 
+		Prerelease = "alpha"
+
         # Tags applied to this module. These help with module discovery in online galleries.
         Tags = @("CloudEndure", "CE", "Migration", "AWS", "Azure", "GCP", "Google")
 
@@ -146,7 +153,10 @@ PrivateData = @{
         # IconUri = ''
 
         # ReleaseNotes of this module
-        ReleaseNotes = "*1.2.1.1
+        ReleaseNotes = "*2.0.0-alpha
+The whole module has been almost completely rewritten. It now only targets the latest version of the API, v5. This is an alpha release, so certain components may not work, testing was only done against AWS.
+		
+*1.2.1.1
 Updated manifest to include BAMCIS.DynamicParam.
 	
 *1.2.1.0

@@ -1,0 +1,17 @@
+{
+  "region": "71fbc661-a3a8-4315-bcf9-3db3353a6ef8",
+  "volumeEncryptionKey": "",
+  "subnetId": "",
+  "zone": "",
+  "usePrivateIp": false,
+  "disablePublicIp": false,
+  "useDedicatedServer": false,
+  "replicationServerType": "Default",
+  "replicationTags": [],
+  "replicatorSecurityGroupIDs": [],
+  "volumeEncryptionAllowed": false,
+  "storageLocationId": "",
+  "useLowCostDisks": false,
+  "proxyUrl": "",
+  "bandwidthThrottling": 0
+}

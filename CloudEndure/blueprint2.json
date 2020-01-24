@@ -1,0 +1,20 @@
+{
+  "iamRole": "",
+  "publicIPAction": "AS_SUBNET",
+  "securityGroupIDs": [
+    ""
+  ],
+  "instanceType": "t3.micro",
+  "subnetIDs": [
+    ""
+  ],
+  "disks": [
+    {
+      "iops": 0,
+      "type": "SSD",
+      "name": "c:0"
+    }
+  ],
+  "privateIPAction": "USE_NETWORK_INTERFACE",
+  "staticIPActions": "DONT_CREATE"
+}
