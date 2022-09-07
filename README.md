@@ -1,5 +1,8 @@
 # CloudEndure
 
+*This project is no longer being maintained. AWS has acquired CloudEndure and it is now two native AWS services, [AWS Elastic Disaster Recovery](https://aws.amazon.com/disaster-recovery/) and [AWS Application Migration Service](https://aws.amazon.com/application-migration-service/), supported with their SDKs/CLI.*
+
+
 I developed this module when working at a former job when we were using CloudEndure a lot to do migrations for a customer. That was in 2016/2017. I just rewrote this whole module, it is now an alpha release. Please test, submit issues, PRs, etc.
 
 ## Information
